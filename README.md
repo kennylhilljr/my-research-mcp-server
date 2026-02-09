@@ -1,0 +1,155 @@
+# arXiv MCP Server — Full-Text PDF Search
+
+An MCP server that searches arXiv, downloads paper PDFs, extracts their full text, and lets you query across the content of your entire local paper library using SQLite FTS5.
+
+## Architecture
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────────────┐
+│  arXiv API   │────▶│  Download    │────▶│  PDF Text Extraction │
+│  (metadata)  │     │  PDFs        │     │  (PyMuPDF)           │
+└──────────────┘     └──────────────┘     └──────────┬───────────┘
+                                                     │
+                                                     ▼
+┌──────────────┐     ┌──────────────────────────────────────────┐
+│  MCP Client  │◀───▶│  SQLite FTS5 Index                      │
+│  (Claude)    │     │  • papers table (metadata)               │
+│              │     │  • chunks table (text segments + pages)  │
+│              │     │  • chunks_fts (full-text search)         │
+└──────────────┘     └──────────────────────────────────────────┘
+```
+
+**Pipeline**: Search arXiv → Download PDF → Extract text (PyMuPDF) → Chunk with overlap & heading detection → Index in SQLite FTS5 → Query with BM25 ranking
+
+## Tools (11 total)
+
+### arXiv API
+| Tool | Description |
+|------|-------------|
+| `search_arxiv` | Search arXiv's catalog with full query syntax |
+| `get_paper_metadata` | Fetch metadata by arXiv ID |
+
+### Download & Index
+| Tool | Description |
+|------|-------------|
+| `download_paper` | Download PDF + auto-index full text |
+| `index_paper` | Manually index/re-index a single paper |
+| `index_all_papers` | Batch-index all PDFs in the download directory |
+
+### Full-Text Search (the core feature)
+| Tool | Description |
+|------|-------------|
+| `query_papers` | **Full-text search across all indexed paper content** — finds specific passages, methods, results, equations |
+| `get_paper_text` | Retrieve full text or specific pages of an indexed paper |
+
+### Management
+| Tool | Description |
+|------|-------------|
+| `list_indexed_papers` | List all papers in the index with stats |
+| `remove_paper` | Remove a paper from the index |
+| `index_stats` | Get index statistics |
+
+## Quick Start
+
+### 1. Install dependencies
+
+```bash
+pip install mcp requests pymupdf
+```
+
+### 2. Run
+
+```bash
+python server.py                          # stdio (Claude Desktop / Claude Code)
+python server.py --transport sse --port 8080  # HTTP/SSE
+```
+
+### 3. Configure Claude Desktop
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "arxiv": {
+      "command": "python",
+      "args": ["/absolute/path/to/server.py"],
+      "env": {
+        "ARXIV_DOWNLOAD_DIR": "~/arxiv-papers",
+        "ARXIV_CHUNK_SIZE": "1500",
+        "ARXIV_CHUNK_OVERLAP": "200"
+      }
+    }
+  }
+}
+```
+
+### Claude Code
+
+```bash
+claude mcp add arxiv python /absolute/path/to/server.py
+```
+
+## Query Syntax
+
+### arXiv API search (`search_arxiv`)
+```
+ti:transformer AND cat:cs.CL
+au:vaswani AND ti:attention
+(cat:cs.AI OR cat:cs.CL) AND all:large language model
+```
+
+### Full-text content search (`query_papers`)
+```
+gradient descent convergence            # implicit AND
+"self-supervised learning"              # exact phrase
+attention AND mechanism                 # explicit AND
+transformer OR attention                # OR
+NEAR(policy gradient, 10)              # proximity (within 10 tokens)
+reinforc*                               # prefix matching
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ARXIV_DOWNLOAD_DIR` | `~/arxiv-papers` | PDF storage + default DB location |
+| `ARXIV_DB_PATH` | `<DOWNLOAD_DIR>/arxiv_index.db` | SQLite database path |
+| `ARXIV_CHUNK_SIZE` | `1500` | Characters per text chunk |
+| `ARXIV_CHUNK_OVERLAP` | `200` | Overlap between chunks for context continuity |
+
+## How Indexing Works
+
+1. **Text extraction** — PyMuPDF reads every page of the PDF
+2. **Heading detection** — Heuristics identify section headings (numbered sections, ALL-CAPS, common academic titles)
+3. **Chunking** — Text is split into ~1500-char overlapping segments, each tagged with page range and nearest heading
+4. **Content hashing** — SHA-256 hash detects when a PDF changes and needs re-indexing
+5. **FTS5 indexing** — Porter stemming + Unicode tokenization enables fuzzy, stemmed search with BM25 ranking
+6. **Triggers** — SQLite triggers keep the FTS index in sync on every insert/update/delete
+
+## Example Session
+
+```
+You: Search arXiv for papers on "policy-as-code" in software engineering
+→ search_arxiv("all:policy-as-code", category="cs.SE")
+
+You: Download the top 3 results
+→ download_paper("2401.xxxxx")  # auto-indexes each one
+→ download_paper("2402.yyyyy")
+→ download_paper("2403.zzzzz")
+
+You: What do these papers say about OPA Rego validation?
+→ query_papers("OPA Rego validation")
+  Returns: matching text passages with page numbers and headings
+
+You: Show me pages 5-8 of that first paper
+→ get_paper_text("2401.xxxxx", page_start=5, page_end=8)
+
+You: How many papers do I have indexed?
+→ index_stats()
+```
+
+## License
+
+MIT

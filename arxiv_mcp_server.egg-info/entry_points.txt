@@ -1,0 +1,2 @@
+[console_scripts]
+arxiv-mcp = server:mcp.run
