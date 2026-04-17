@@ -1,11 +1,11 @@
 [project]
 name = "my-research-mcp-server"
 version = "2.0.0"
-description = "MCP server for searching arXiv, Semantic Scholar, Harvard DASH, MIT DSpace, Cornell eCommons, Penn ScholarlyCommons — with full-text PDF indexing and search"
+description = "MCP server for multi-source academic research: arXiv, Semantic Scholar, OpenAlex, CORE, Crossref, institutional repositories (MIT, Harvard, Cornell, Penn), cloud vendor docs, IAM docs, GitHub — with full-text PDF indexing, DuckDB analytics, and semantic vector search"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-keywords = ["mcp", "arxiv", "research", "pdf", "full-text-search", "semantic-scholar", "dspace"]
+keywords = ["mcp", "arxiv", "research", "pdf", "full-text-search", "semantic-scholar", "dspace", "openalex", "crossref", "doi", "core", "cloud-docs", "iam", "duckdb", "embeddings"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -21,6 +21,9 @@ dependencies = [
     "mcp>=1.0.0",
     "requests>=2.28.0",
     "pymupdf>=1.23.0",
+    "duckdb>=1.0.0",
+    "google-auth>=2.0.0",
+    "fastembed>=0.3.0",
 ]
 
 [project.optional-dependencies]

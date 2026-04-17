@@ -444,14 +444,17 @@ def compute_content_hash(pdf_path: str) -> str:
 # ARXIV API HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
-_last_request_time = 0.0
+def _make_rate_limiter(delay):
+    """Create a rate-limiter closure that enforces *delay* seconds between calls."""
+    state = {"last": 0.0}
+    def _limit():
+        elapsed = time.time() - state["last"]
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+        state["last"] = time.time()
+    return _limit
 
-def _rate_limit():
-    global _last_request_time
-    elapsed = time.time() - _last_request_time
-    if elapsed < RATE_LIMIT_SECONDS:
-        time.sleep(RATE_LIMIT_SECONDS - elapsed)
-    _last_request_time = time.time()
+_rate_limit = _make_rate_limiter(RATE_LIMIT_SECONDS)  # arXiv (3s)
 
 
 def _parse_entry(entry: ET.Element) -> dict:
@@ -533,6 +536,27 @@ def _get_download_dir(custom: str = None) -> Path:
     return d
 
 
+def _clamp(val, lo=1, hi=100):
+    """Clamp an integer value to [lo, hi]."""
+    return max(lo, min(hi, int(val)))
+
+
+def _index_downloaded_pdf(filepath, paper_meta, result, id_label):
+    """Extract text from a downloaded PDF and index it. Mutates *result* in place."""
+    try:
+        idx = _get_index()
+        pages = extract_text_from_pdf(str(filepath))
+        chunks = chunk_pages(pages)
+        content_hash = compute_content_hash(str(filepath))
+        idx.upsert_paper(paper_meta, chunks, str(filepath), len(pages), content_hash)
+        result["indexed"] = True
+        result["total_pages"] = len(pages)
+        result["total_chunks"] = len(chunks)
+    except Exception as e:
+        result["index_error"] = str(e)
+        logger.error(f"Indexing failed for {id_label}: {e}")
+
+
 # ── arXiv API Tools ──────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -562,8 +586,7 @@ def search_arxiv(
     Returns:
         JSON with total_results and entries list.
     """
-    if max_results < 1: max_results = 1
-    if max_results > 100: max_results = 100
+    max_results = _clamp(max_results, 1, 100)
 
     search_query = f"({query}) AND cat:{category}" if category else query
     params = {
@@ -654,18 +677,7 @@ def download_paper(
     }
 
     if auto_index:
-        try:
-            idx = _get_index()
-            pages = extract_text_from_pdf(str(filepath))
-            chunks = chunk_pages(pages)
-            content_hash = compute_content_hash(str(filepath))
-            idx.upsert_paper(paper_meta, chunks, str(filepath), len(pages), content_hash)
-            result["indexed"] = True
-            result["total_pages"] = len(pages)
-            result["total_chunks"] = len(chunks)
-        except Exception as e:
-            result["index_error"] = str(e)
-            logger.error(f"Indexing failed for {arxiv_id}: {e}")
+        _index_downloaded_pdf(filepath, paper_meta, result, arxiv_id)
 
     return json.dumps(result, indent=2)
 
@@ -883,16 +895,7 @@ def index_stats() -> str:
 
 SEMANTIC_SCHOLAR_API_BASE = "https://api.semanticscholar.org/graph/v1"
 SS_FIELDS = "title,abstract,authors,year,externalIds,url,openAccessPdf,citationCount,fieldsOfStudy"
-_ss_last_request_time = 0.0
-
-
-def _ss_rate_limit():
-    """Respect Semantic Scholar's rate limits."""
-    global _ss_last_request_time
-    elapsed = time.time() - _ss_last_request_time
-    if elapsed < 1.0:
-        time.sleep(1.0 - elapsed)
-    _ss_last_request_time = time.time()
+_ss_rate_limit = _make_rate_limiter(1.0)  # Semantic Scholar
 
 
 def _ss_request(url: str, params: dict, max_retries: int = 3) -> requests.Response:
@@ -938,10 +941,7 @@ def search_semantic_scholar(
         authors, year, citation count, external IDs (arXiv, DOI, etc.),
         and open-access PDF links when available.
     """
-    if max_results < 1:
-        max_results = 1
-    if max_results > 100:
-        max_results = 100
+    max_results = _clamp(max_results, 1, 100)
 
     params = {
         "query": query,
@@ -1119,10 +1119,7 @@ def search_mit_dspace(
         JSON with matching items including title, authors, abstract,
         department, date, handle URL, and document type.
     """
-    if max_results < 1:
-        max_results = 1
-    if max_results > 100:
-        max_results = 100
+    max_results = _clamp(max_results, 1, 100)
 
     logger.info(f"DSpace@MIT search: {query} (field={search_field})")
 
@@ -1360,7 +1357,7 @@ def search_harvard_dash(query: str, max_results: int = 10) -> str:
         query: Search terms (matched against title, abstract, metadata).
         max_results: 1-100 results to return (default 10).
     """
-    max_results = max(1, min(100, max_results))
+    max_results = _clamp(max_results, 1, 100)
     return json.dumps(_dspace8_search("harvard", query, max_results), indent=2)
 
 
@@ -1388,7 +1385,7 @@ def search_cornell_ecommons(query: str, max_results: int = 10) -> str:
         query: Search terms (matched against title, abstract, metadata).
         max_results: 1-100 results to return (default 10).
     """
-    max_results = max(1, min(100, max_results))
+    max_results = _clamp(max_results, 1, 100)
     return json.dumps(_dspace8_search("cornell", query, max_results), indent=2)
 
 
@@ -1416,7 +1413,7 @@ def search_penn_scholarly(query: str, max_results: int = 10) -> str:
         query: Search terms (matched against title, abstract, metadata).
         max_results: 1-100 results to return (default 10).
     """
-    max_results = max(1, min(100, max_results))
+    max_results = _clamp(max_results, 1, 100)
     return json.dumps(_dspace8_search("penn", query, max_results), indent=2)
 
 
@@ -1575,10 +1572,7 @@ def search_crossref(
         JSON with total results and entries including title, authors, journal,
         DOI, citation count, and publication date.
     """
-    if max_results < 1:
-        max_results = 1
-    if max_results > 100:
-        max_results = 100
+    max_results = _clamp(max_results, 1, 100)
 
     params = {
         "query": query,
@@ -1805,26 +1799,15 @@ def download_paper_by_doi(
     }
 
     if auto_index:
-        try:
-            idx = _get_index()
-            pages = extract_text_from_pdf(str(filepath))
-            chunks = chunk_pages(pages)
-            content_hash = compute_content_hash(str(filepath))
-            paper_meta = {
-                "arxiv_id": f"doi:{doi}",
-                "title": result["title"],
-                "authors": result["authors"],
-                "summary": metadata.get("abstract", ""),
-                "categories": metadata.get("subject", []),
-                "published": metadata.get("published", ""),
-            }
-            idx.upsert_paper(paper_meta, chunks, str(filepath), len(pages), content_hash)
-            result["indexed"] = True
-            result["total_pages"] = len(pages)
-            result["total_chunks"] = len(chunks)
-        except Exception as e:
-            result["index_error"] = str(e)
-            logger.error(f"Indexing failed for DOI {doi}: {e}")
+        paper_meta = {
+            "arxiv_id": f"doi:{doi}",
+            "title": result["title"],
+            "authors": result["authors"],
+            "summary": metadata.get("abstract", ""),
+            "categories": metadata.get("subject", []),
+            "published": metadata.get("published", ""),
+        }
+        _index_downloaded_pdf(filepath, paper_meta, result, f"DOI {doi}")
 
     return json.dumps(result, indent=2)
 
@@ -1943,10 +1926,7 @@ def search_openalex(
         institutions, year, abstract, citation count, concepts/topics,
         and PDF URL when available.
     """
-    if max_results < 1:
-        max_results = 1
-    if max_results > 200:
-        max_results = 200
+    max_results = _clamp(max_results, 1, 200)
 
     # Build filter string
     filters = []
@@ -2046,10 +2026,7 @@ def search_openalex_authors(query: str, max_results: int = 10) -> str:
         JSON with author entries including ID, name, affiliations,
         works count, and citation count.
     """
-    if max_results < 1:
-        max_results = 1
-    if max_results > 50:
-        max_results = 50
+    max_results = _clamp(max_results, 1, 50)
 
     params = _openalex_params({
         "search": query,
@@ -2095,16 +2072,7 @@ def search_openalex_authors(query: str, max_results: int = 10) -> str:
 
 CORE_API_BASE = "https://api.core.ac.uk/v3"
 CORE_API_KEY = os.environ.get("CORE_API_KEY", "")
-_core_last_request_time = 0.0
-
-
-def _core_rate_limit():
-    """CORE allows ~10 requests/minute on the free tier."""
-    global _core_last_request_time
-    elapsed = time.time() - _core_last_request_time
-    if elapsed < 6.5:
-        time.sleep(6.5 - elapsed)
-    _core_last_request_time = time.time()
+_core_rate_limit = _make_rate_limiter(6.5)  # CORE (~10 req/min free tier)
 
 
 def _core_headers() -> dict:
@@ -2187,10 +2155,7 @@ def search_core(
                      "https://core.ac.uk/services/api and set the env var.",
         })
 
-    if max_results < 1:
-        max_results = 1
-    if max_results > 100:
-        max_results = 100
+    max_results = _clamp(max_results, 1, 100)
 
     # Build query with filters
     q_parts = [query]
@@ -2327,26 +2292,15 @@ def download_core_paper(
     }
 
     if auto_index:
-        try:
-            idx = _get_index()
-            pages = extract_text_from_pdf(str(filepath))
-            chunks = chunk_pages(pages)
-            content_hash = compute_content_hash(str(filepath))
-            paper_meta = {
-                "arxiv_id": f"core:{core_id}",
-                "title": metadata.get("title", ""),
-                "authors": metadata.get("authors", []),
-                "summary": metadata.get("abstract", ""),
-                "categories": [],
-                "published": metadata.get("publication_date", ""),
-            }
-            idx.upsert_paper(paper_meta, chunks, str(filepath), len(pages), content_hash)
-            result["indexed"] = True
-            result["total_pages"] = len(pages)
-            result["total_chunks"] = len(chunks)
-        except Exception as e:
-            result["index_error"] = str(e)
-            logger.error(f"Indexing failed for CORE {core_id}: {e}")
+        paper_meta = {
+            "arxiv_id": f"core:{core_id}",
+            "title": metadata.get("title", ""),
+            "authors": metadata.get("authors", []),
+            "summary": metadata.get("abstract", ""),
+            "categories": [],
+            "published": metadata.get("publication_date", ""),
+        }
+        _index_downloaded_pdf(filepath, paper_meta, result, f"CORE {core_id}")
 
     return json.dumps(result, indent=2)
 
@@ -2390,7 +2344,7 @@ def search_aws_docs(query: str, max_results: int = 10) -> str:
         query: Search terms.
         max_results: 1-50 results to return (default 10).
     """
-    max_results = max(1, min(50, max_results))
+    max_results = _clamp(max_results, 1, 50)
     session_id = str(uuid.uuid4())
     body = {
         "textQuery": {"input": query},
@@ -2453,7 +2407,7 @@ def search_gcp_docs(query: str, max_results: int = 10) -> str:
                     "export GOOGLE_DEVKNOWLEDGE_API_KEY.",
         }, indent=2)
 
-    max_results = max(1, min(20, max_results))
+    max_results = _clamp(max_results, 1, 20)
     params = {
         "key": GOOGLE_DEVKNOWLEDGE_API_KEY,
         "query": query,
@@ -2506,7 +2460,7 @@ def search_microsoft_docs(query: str, max_results: int = 10) -> str:
         query: Search terms.
         max_results: 1-50 results to return (default 10).
     """
-    max_results = max(1, min(50, max_results))
+    max_results = _clamp(max_results, 1, 50)
     params = {
         "search": query,
         "locale": "en-us",
@@ -2664,6 +2618,116 @@ IAM_PROJECTS = {
 
 GOOGLE_PSE_CX = os.environ.get("GOOGLE_PSE_CX")
 CUSTOM_SEARCH_URL = "https://www.googleapis.com/customsearch/v1"
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY")
+BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY")
+IAM_DOCS_SEARCH_PROVIDER = os.environ.get("IAM_DOCS_SEARCH_PROVIDER", "auto").strip().lower()
+
+VERTEX_AI_PROJECT = os.environ.get("VERTEX_AI_PROJECT")
+VERTEX_AI_LOCATION = os.environ.get("VERTEX_AI_LOCATION", "global")
+VERTEX_AI_IAM_ENGINE_ID = os.environ.get("VERTEX_AI_IAM_ENGINE_ID")
+_vertex_ai_creds = None
+
+
+def _vertex_ai_access_token() -> str:
+    """Return a fresh OAuth access token from ADC or service account."""
+    global _vertex_ai_creds
+    try:
+        import google.auth
+        from google.auth.transport.requests import Request as _GARequest
+    except ImportError as e:
+        raise RuntimeError(
+            "google-auth not installed. Run: pip install google-auth"
+        ) from e
+    if _vertex_ai_creds is None:
+        _vertex_ai_creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+    if not _vertex_ai_creds.valid:
+        _vertex_ai_creds.refresh(_GARequest())
+    return _vertex_ai_creds.token
+
+
+def _search_iam_docs_vertex(query: str, max_results: int) -> dict:
+    if not VERTEX_AI_PROJECT or not VERTEX_AI_IAM_ENGINE_ID:
+        raise ValueError("VERTEX_AI_PROJECT and VERTEX_AI_IAM_ENGINE_ID must be set")
+    token = _vertex_ai_access_token()
+    url = (
+        f"https://discoveryengine.googleapis.com/v1/projects/{VERTEX_AI_PROJECT}"
+        f"/locations/{VERTEX_AI_LOCATION}/collections/default_collection"
+        f"/engines/{VERTEX_AI_IAM_ENGINE_ID}/servingConfigs/default_search:search"
+    )
+    resp = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Goog-User-Project": VERTEX_AI_PROJECT,
+        },
+        json={"query": query, "pageSize": max_results},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _iam_docs_sites_query(query: str) -> str:
+    sites = " OR ".join(f"site:{d}" for d in IAM_DOCS_DOMAINS)
+    return f"({query}) ({sites})"
+
+
+def _search_iam_docs_brave(query: str, max_results: int) -> dict:
+    if not BRAVE_SEARCH_API_KEY:
+        raise ValueError("BRAVE_SEARCH_API_KEY not set")
+    resp = requests.get(
+        "https://api.search.brave.com/res/v1/web/search",
+        params={
+            "q": _iam_docs_sites_query(query),
+            "count": max_results,
+        },
+        headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _search_iam_docs_serpapi(query: str, max_results: int) -> dict:
+    if not SERPAPI_API_KEY:
+        raise ValueError("SERPAPI_API_KEY not set")
+    resp = requests.get(
+        "https://serpapi.com/search.json",
+        params={
+            "engine": "google",
+            "q": _iam_docs_sites_query(query),
+            "num": max_results,
+            "api_key": SERPAPI_API_KEY,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _search_iam_docs_google_pse(query: str, max_results: int) -> dict:
+    if not GOOGLE_PSE_CX:
+        raise ValueError("GOOGLE_PSE_CX not set")
+    if not GOOGLE_DEVKNOWLEDGE_API_KEY:
+        raise ValueError("GOOGLE_DEVKNOWLEDGE_API_KEY not set")
+    resp = requests.get(
+        CUSTOM_SEARCH_URL,
+        params={
+            "key": GOOGLE_DEVKNOWLEDGE_API_KEY,
+            "cx": GOOGLE_PSE_CX,
+            "q": query,
+            "num": max_results,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ── Path A ──────────────────────────────────────────────────────────────
@@ -2687,56 +2751,107 @@ def search_iam_docs(query: str, max_results: int = 10) -> str:
         query: Search terms.
         max_results: 1-10 results per call (Custom Search API max is 10).
     """
-    if not GOOGLE_PSE_CX:
-        return json.dumps({
-            "error": "GOOGLE_PSE_CX not set.",
-            "hint": "Create a Programmable Search Engine at "
-                    "programmablesearchengine.google.com scoped to IAM doc "
-                    "sites, then export the search engine ID as GOOGLE_PSE_CX.",
-        }, indent=2)
-    if not GOOGLE_DEVKNOWLEDGE_API_KEY:
-        return json.dumps({
-            "error": "GOOGLE_DEVKNOWLEDGE_API_KEY not set.",
-            "hint": "Also enable 'Custom Search API' on the same key in the "
-                    "GCP console (APIs & Services → Library).",
-        }, indent=2)
+    max_results = _clamp(max_results, 1, 10)
+    providers: list[str]
+    if IAM_DOCS_SEARCH_PROVIDER in {"vertex", "brave", "serpapi", "google"}:
+        providers = [IAM_DOCS_SEARCH_PROVIDER]
+    else:
+        providers = []
+        if VERTEX_AI_PROJECT and VERTEX_AI_IAM_ENGINE_ID:
+            providers.append("vertex")
+        if BRAVE_SEARCH_API_KEY:
+            providers.append("brave")
+        if SERPAPI_API_KEY:
+            providers.append("serpapi")
+        providers.append("google")
 
-    max_results = max(1, min(10, max_results))
-    try:
-        resp = requests.get(
-            CUSTOM_SEARCH_URL,
-            params={
-                "key": GOOGLE_DEVKNOWLEDGE_API_KEY,
-                "cx": GOOGLE_PSE_CX,
-                "q": query,
-                "num": max_results,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.HTTPError:
-        return json.dumps({
-            "error": f"IAM docs search failed: HTTP {resp.status_code}",
-            "body": resp.text[:500],
-        }, indent=2)
-    except Exception as e:
-        return json.dumps({"error": f"IAM docs search failed: {e}"}, indent=2)
+    last_error: str | None = None
+    for p in providers:
+        try:
+            if p == "vertex":
+                data = _search_iam_docs_vertex(query, max_results)
+                items = []
+                for r in data.get("results", [])[:max_results]:
+                    d = r.get("document", {}).get("derivedStructData", {}) or {}
+                    snippet = ""
+                    snips = d.get("snippets") or []
+                    if snips and isinstance(snips, list):
+                        snippet = snips[0].get("snippet", "") if isinstance(snips[0], dict) else ""
+                    items.append({
+                        "title": d.get("title", ""),
+                        "url": d.get("link", "") or d.get("formattedUrl", ""),
+                        "snippet": snippet,
+                        "display_url": d.get("displayLink", ""),
+                    })
+                return json.dumps({
+                    "source": "iam_docs_vertex",
+                    "query": query,
+                    "count": len(items),
+                    "results": items,
+                }, indent=2)
 
-    items = []
-    for r in data.get("items", []):
-        items.append({
-            "title": r.get("title", ""),
-            "url": r.get("link", ""),
-            "snippet": r.get("snippet", ""),
-            "display_url": r.get("displayLink", ""),
-        })
+            if p == "brave":
+                data = _search_iam_docs_brave(query, max_results)
+                items = []
+                for r in data.get("web", {}).get("results", [])[:max_results]:
+                    items.append({
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "snippet": r.get("description", ""),
+                        "display_url": r.get("profile", {}).get("name", ""),
+                    })
+                return json.dumps({
+                    "source": "iam_docs_brave",
+                    "query": query,
+                    "count": len(items),
+                    "results": items,
+                }, indent=2)
+
+            if p == "serpapi":
+                data = _search_iam_docs_serpapi(query, max_results)
+                items = []
+                for r in data.get("organic_results", [])[:max_results]:
+                    items.append({
+                        "title": r.get("title", ""),
+                        "url": r.get("link", ""),
+                        "snippet": r.get("snippet", ""),
+                        "display_url": r.get("displayed_link", ""),
+                    })
+                return json.dumps({
+                    "source": "iam_docs_serpapi",
+                    "query": query,
+                    "count": len(items),
+                    "results": items,
+                }, indent=2)
+
+            data = _search_iam_docs_google_pse(query, max_results)
+            items = []
+            for r in data.get("items", []):
+                items.append({
+                    "title": r.get("title", ""),
+                    "url": r.get("link", ""),
+                    "snippet": r.get("snippet", ""),
+                    "display_url": r.get("displayLink", ""),
+                })
+            return json.dumps({
+                "source": "iam_docs_pse",
+                "query": query,
+                "total_results": int(data.get("searchInformation", {}).get("totalResults", "0")),
+                "count": len(items),
+                "results": items,
+            }, indent=2)
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            body = getattr(e.response, "text", "")
+            last_error = f"{p}: HTTP {status} {body[:200]}"
+        except Exception as e:
+            last_error = f"{p}: {e}"
+
     return json.dumps({
-        "source": "iam_docs_pse",
-        "query": query,
-        "total_results": int(data.get("searchInformation", {}).get("totalResults", "0")),
-        "count": len(items),
-        "results": items,
+        "error": "IAM docs search failed",
+        "details": last_error,
+        "hint": "Set IAM_DOCS_SEARCH_PROVIDER to one of: brave, serpapi, google, auto. "
+                "Also ensure SERPAPI_API_KEY or BRAVE_SEARCH_API_KEY is set for non-Google providers.",
     }, indent=2)
 
 
@@ -2842,7 +2957,7 @@ def index_iam_project(project: str, max_pages: int = 100) -> str:
         }, indent=2)
 
     cfg = IAM_PROJECTS[project]
-    max_pages = max(1, min(500, max_pages))
+    max_pages = _clamp(max_pages, 1, 500)
 
     try:
         all_urls = _resolve_project_urls(cfg)
@@ -3024,7 +3139,7 @@ def search_github_repos(query: str, max_results: int = 10, sort: str = "stars") 
         max_results: 1-50 results (default 10).
         sort: 'stars', 'forks', 'updated', or 'best-match' (default 'stars').
     """
-    max_results = max(1, min(50, max_results))
+    max_results = _clamp(max_results, 1, 50)
     params = {"q": query, "per_page": max_results}
     if sort != "best-match":
         params["sort"] = sort
@@ -3082,7 +3197,7 @@ def search_github_code(query: str, max_results: int = 10) -> str:
                     "with public-repo read access and export GITHUB_TOKEN.",
         }, indent=2)
 
-    max_results = max(1, min(30, max_results))
+    max_results = _clamp(max_results, 1, 30)
     try:
         resp = requests.get(
             f"{GITHUB_API_BASE}/search/code",
@@ -3145,6 +3260,413 @@ def fetch_github_readme(repo: str, max_chars: int = 20000) -> str:
         "truncated": truncated,
         "text": text,
     }, indent=2)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DUCKDB TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+# Read-only SQL analytics over the existing SQLite papers/chunks DB, plus ad
+# hoc SQL over Parquet/CSV/JSON files. Uses DuckDB — zero-copy SQLite attach
+# and columnar file readers. Only SELECT/WITH queries are allowed.
+
+DUCKDB_DATASETS_DIR = os.environ.get(
+    "DUCKDB_DATASETS_DIR",
+    os.path.expanduser("~/research-datasets"),
+)
+_duckdb_conn = None
+
+
+def _duckdb() -> "object":
+    """Return a shared in-memory DuckDB connection (lazy)."""
+    global _duckdb_conn
+    import duckdb
+    if _duckdb_conn is None:
+        _duckdb_conn = duckdb.connect(database=":memory:")
+        # Attach the SQLite papers index read-only so analytics_sql works.
+        try:
+            _duckdb_conn.execute("INSTALL sqlite; LOAD sqlite;")
+            _duckdb_conn.execute(
+                f"ATTACH '{DEFAULT_DB_PATH}' AS papers_db (TYPE sqlite, READ_ONLY);"
+            )
+        except Exception as e:
+            logger.warning(f"DuckDB SQLite attach failed: {e}")
+    return _duckdb_conn
+
+
+_READ_ONLY_SQL_RE = re.compile(
+    r"^\s*(?:with\b[\s\S]*?select\b|select\b|pragma\b|describe\b|show\b)",
+    re.IGNORECASE,
+)
+_FORBIDDEN_SQL_RE = re.compile(
+    r"\b(attach|detach|copy\s+.*\s+to\b|insert|update|delete|drop|create|alter|"
+    r"truncate|call|execute|export|load|install|set\s+\w+\s*=)\b",
+    re.IGNORECASE,
+)
+
+
+def _ensure_read_only_sql(sql: str) -> Optional[str]:
+    """Return an error string if the SQL is not a safe read-only query."""
+    if ";" in sql.strip().rstrip(";"):
+        return "Only a single SQL statement is allowed."
+    if not _READ_ONLY_SQL_RE.match(sql):
+        return "Only SELECT/WITH/PRAGMA/DESCRIBE/SHOW queries are allowed."
+    if _FORBIDDEN_SQL_RE.search(sql):
+        return "Statement contains forbidden keywords (writes/DDL/side-effects)."
+    return None
+
+
+def _duckdb_rows_to_json(cur) -> dict:
+    cols = [d[0] for d in cur.description] if cur.description else []
+    rows = cur.fetchall()
+    return {
+        "columns": cols,
+        "row_count": len(rows),
+        "rows": [dict(zip(cols, r)) for r in rows],
+    }
+
+
+@mcp.tool()
+def analytics_sql(sql: str, limit: int = 100) -> str:
+    """
+    Run read-only SQL analytics over the local papers/chunks SQLite DB via
+    DuckDB. The SQLite DB is attached as schema `papers_db` (read-only).
+
+    Tables available:
+        papers_db.papers   - paper metadata (arxiv_id, title, authors JSON,
+                             abstract, categories, published, pdf_path,
+                             total_pages, indexed_at, content_hash)
+        papers_db.chunks   - chunked text (chunk_id, arxiv_id, page_start,
+                             page_end, chunk_index, heading, content)
+
+    Examples:
+        SELECT COUNT(*) FROM papers_db.papers
+        SELECT SUBSTR(published, 1, 4) AS year, COUNT(*) AS n
+          FROM papers_db.papers GROUP BY 1 ORDER BY 1 DESC
+        SELECT arxiv_id, title FROM papers_db.papers WHERE title ILIKE '%keycloak%'
+        SELECT arxiv_id, COUNT(*) AS chunk_count
+          FROM papers_db.chunks GROUP BY arxiv_id
+          ORDER BY chunk_count DESC LIMIT 10
+        SELECT column_name, data_type FROM duckdb_columns()
+          WHERE table_name = 'papers'
+
+    Args:
+        sql: A single SELECT/WITH/PRAGMA/DESCRIBE/SHOW query.
+        limit: Max rows to return (default 100, hard cap 10000).
+    """
+    err = _ensure_read_only_sql(sql)
+    if err:
+        return json.dumps({"error": err}, indent=2)
+    limit = _clamp(limit, 1, 10000)
+    try:
+        con = _duckdb()
+        cur = con.execute(f"SELECT * FROM ({sql.rstrip(';')}) AS _q LIMIT {limit}")
+        result = _duckdb_rows_to_json(cur)
+        result["limit"] = limit
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return json.dumps({"error": f"analytics_sql failed: {e}"}, indent=2)
+
+
+@mcp.tool()
+def list_datasets() -> str:
+    """
+    List data files (Parquet/CSV/JSON/NDJSON) under DUCKDB_DATASETS_DIR so you
+    can reference them from `dataset_query`.
+
+    Set DUCKDB_DATASETS_DIR to change the root (default: ~/research-datasets).
+    """
+    root = Path(DUCKDB_DATASETS_DIR)
+    if not root.exists():
+        return json.dumps({
+            "datasets_dir": str(root),
+            "exists": False,
+            "hint": f"Create {root} and drop Parquet/CSV/JSON files into it.",
+            "files": [],
+        }, indent=2)
+    exts = {".parquet", ".csv", ".tsv", ".json", ".ndjson", ".jsonl"}
+    files = []
+    for p in root.rglob("*"):
+        if p.is_file() and p.suffix.lower() in exts:
+            files.append({
+                "path": str(p),
+                "relative": str(p.relative_to(root)),
+                "size_bytes": p.stat().st_size,
+                "ext": p.suffix.lower(),
+            })
+    files.sort(key=lambda x: x["relative"])
+    return json.dumps({
+        "datasets_dir": str(root),
+        "exists": True,
+        "file_count": len(files),
+        "files": files,
+    }, indent=2)
+
+
+@mcp.tool()
+def dataset_query(sql: str, limit: int = 100) -> str:
+    """
+    Run read-only SQL over Parquet/CSV/JSON/NDJSON files under
+    DUCKDB_DATASETS_DIR. Reference files with DuckDB reader functions using
+    paths (absolute or relative to DUCKDB_DATASETS_DIR).
+
+    Examples:
+        SELECT * FROM read_parquet('arxiv_meta.parquet') LIMIT 10
+        SELECT category, COUNT(*) FROM read_csv_auto('openalex.csv') GROUP BY 1
+        SELECT * FROM read_json_auto('dump.ndjson')
+
+    For security, only file paths that resolve inside DUCKDB_DATASETS_DIR are
+    allowed. Only a single SELECT/WITH/PRAGMA/DESCRIBE/SHOW statement.
+
+    Args:
+        sql: A single SELECT/WITH/PRAGMA/DESCRIBE/SHOW query.
+        limit: Max rows to return (default 100, hard cap 10000).
+    """
+    err = _ensure_read_only_sql(sql)
+    if err:
+        return json.dumps({"error": err}, indent=2)
+
+    root = Path(DUCKDB_DATASETS_DIR).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+
+    # Extract file paths from DuckDB reader functions and sandbox them.
+    reader_re = re.compile(
+        r"(read_parquet|read_csv|read_csv_auto|read_json|read_json_auto|read_ndjson|"
+        r"read_ndjson_auto|parquet_scan)\s*\(\s*['\"]([^'\"]+)['\"]",
+        re.IGNORECASE,
+    )
+    safe_sql = sql
+    for m in reader_re.finditer(sql):
+        raw = m.group(2)
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = (root / raw)
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            return json.dumps({"error": f"Cannot resolve path: {raw}"}, indent=2)
+        if root not in resolved.parents and resolved != root:
+            return json.dumps({
+                "error": "Path outside DUCKDB_DATASETS_DIR is not allowed",
+                "path": str(resolved),
+                "datasets_dir": str(root),
+            }, indent=2)
+        # Rewrite with the resolved absolute path.
+        safe_sql = safe_sql.replace(f"'{raw}'", f"'{resolved}'").replace(
+            f'"{raw}"', f"'{resolved}'"
+        )
+
+    limit = _clamp(limit, 1, 10000)
+    try:
+        con = _duckdb()
+        cur = con.execute(f"SELECT * FROM ({safe_sql.rstrip(';')}) AS _q LIMIT {limit}")
+        result = _duckdb_rows_to_json(cur)
+        result["limit"] = limit
+        result["datasets_dir"] = str(root)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return json.dumps({"error": f"dataset_query failed: {e}"}, indent=2)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SEMANTIC SEARCH (DuckDB VSS + fastembed)
+# ═══════════════════════════════════════════════════════════════════════════
+# Embeds paper chunks with a local ONNX model (fastembed) and stores vectors
+# in a persistent DuckDB file with an HNSW index for fast cosine similarity.
+# Default model: BAAI/bge-small-en-v1.5 (384-dim, ~100MB on first use).
+
+EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL_NAME", "BAAI/bge-small-en-v1.5")
+EMBED_DIM = int(os.environ.get("EMBED_DIM", "384"))
+EMBED_DB_PATH = os.environ.get(
+    "EMBED_DB_PATH",
+    os.path.join(DEFAULT_DOWNLOAD_DIR, "embeddings.duckdb"),
+)
+_embed_model = None
+
+
+def _get_embed_model():
+    """Lazy-load the fastembed model (downloads on first use)."""
+    global _embed_model
+    if _embed_model is None:
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as e:
+            raise RuntimeError(
+                "fastembed not installed. Run: pip install fastembed"
+            ) from e
+        logger.info(f"Loading embedding model: {EMBED_MODEL_NAME}")
+        _embed_model = TextEmbedding(model_name=EMBED_MODEL_NAME)
+    return _embed_model
+
+
+def _embed_texts(texts: list[str]) -> list[list[float]]:
+    """Return one 384-dim embedding per input text (as python floats)."""
+    model = _get_embed_model()
+    return [list(map(float, v)) for v in model.embed(texts)]
+
+
+def _ensure_embed_schema(con) -> None:
+    """Attach persistent embeddings DB + ensure table and HNSW index exist."""
+    # Only attach once per connection.
+    attached = con.execute(
+        "SELECT 1 FROM duckdb_databases() WHERE database_name='emb'"
+    ).fetchone()
+    if not attached:
+        Path(EMBED_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+        con.execute(f"ATTACH '{EMBED_DB_PATH}' AS emb;")
+    con.execute("INSTALL vss; LOAD vss;")
+    con.execute("SET hnsw_enable_experimental_persistence=true;")
+    con.execute(f"""
+        CREATE TABLE IF NOT EXISTS emb.embeddings (
+            chunk_id BIGINT PRIMARY KEY,
+            arxiv_id VARCHAR,
+            content_hash VARCHAR,
+            embedding FLOAT[{EMBED_DIM}]
+        );
+    """)
+    # HNSW index (no-op if it already exists).
+    try:
+        con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw
+            ON emb.embeddings USING HNSW (embedding)
+            WITH (metric = 'cosine');
+        """)
+    except Exception as e:
+        logger.warning(f"HNSW index create skipped: {e}")
+
+
+@mcp.tool()
+def embedding_stats() -> str:
+    """
+    Show how many chunks are embedded vs total, and the embedding model in use.
+    """
+    try:
+        con = _duckdb()
+        _ensure_embed_schema(con)
+        total = con.execute("SELECT COUNT(*) FROM papers_db.chunks").fetchone()[0]
+        embedded = con.execute("SELECT COUNT(*) FROM emb.embeddings").fetchone()[0]
+        return json.dumps({
+            "model": EMBED_MODEL_NAME,
+            "dimensions": EMBED_DIM,
+            "embeddings_db": EMBED_DB_PATH,
+            "total_chunks": total,
+            "embedded_chunks": embedded,
+            "missing": max(0, total - embedded),
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"embedding_stats failed: {e}"}, indent=2)
+
+
+@mcp.tool()
+def embed_chunks(limit: int = 500, batch_size: int = 32) -> str:
+    """
+    Embed paper chunks that don't yet have embeddings. Run this after
+    indexing new papers. Uses the local fastembed ONNX model (no API calls).
+
+    Args:
+        limit: Max chunks to embed in this call (default 500, cap 10000).
+        batch_size: Model batch size (default 32).
+    """
+    limit = _clamp(limit, 1, 10000)
+    batch_size = _clamp(batch_size, 1, 256)
+    try:
+        con = _duckdb()
+        _ensure_embed_schema(con)
+        rows = con.execute(f"""
+            SELECT c.chunk_id, c.arxiv_id, c.content
+            FROM papers_db.chunks c
+            LEFT JOIN emb.embeddings e ON e.chunk_id = c.chunk_id
+            WHERE e.chunk_id IS NULL
+              AND c.content IS NOT NULL
+              AND LENGTH(c.content) > 0
+            ORDER BY c.chunk_id
+            LIMIT {limit}
+        """).fetchall()
+        if not rows:
+            return json.dumps({
+                "status": "up_to_date",
+                "embedded_this_call": 0,
+            }, indent=2)
+
+        inserted = 0
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i : i + batch_size]
+            texts = [r[2] for r in batch]
+            vectors = _embed_texts(texts)
+            for (chunk_id, arxiv_id, content), vec in zip(batch, vectors):
+                chash = hashlib.sha1(content.encode("utf-8", "ignore")).hexdigest()
+                con.execute(
+                    "INSERT OR REPLACE INTO emb.embeddings "
+                    "(chunk_id, arxiv_id, content_hash, embedding) VALUES (?, ?, ?, ?)",
+                    [chunk_id, arxiv_id, chash, vec],
+                )
+                inserted += 1
+        con.execute("CHECKPOINT emb;")
+        return json.dumps({
+            "status": "ok",
+            "embedded_this_call": inserted,
+            "model": EMBED_MODEL_NAME,
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"embed_chunks failed: {e}"}, indent=2)
+
+
+@mcp.tool()
+def semantic_search(query: str, max_results: int = 10, arxiv_id: str = "") -> str:
+    """
+    Semantic (vector) search over embedded paper chunks using cosine similarity.
+
+    Requires chunks to have been embedded via `embed_chunks`. Only embedded
+    chunks participate in the search — unembedded chunks are skipped.
+
+    Args:
+        query: Natural-language query.
+        max_results: Max chunks to return (default 10, cap 100).
+        arxiv_id: Optional — restrict results to a single paper.
+    """
+    max_results = _clamp(max_results, 1, 100)
+    try:
+        con = _duckdb()
+        _ensure_embed_schema(con)
+        qvec = _embed_texts([query])[0]
+        where = ""
+        params: list = [qvec]
+        if arxiv_id:
+            where = "WHERE e.arxiv_id = ?"
+            params.append(arxiv_id)
+        sql = f"""
+            SELECT e.chunk_id, e.arxiv_id, c.heading, c.page_start, c.content,
+                   array_cosine_similarity(e.embedding, ?::FLOAT[{EMBED_DIM}]) AS score
+            FROM emb.embeddings e
+            JOIN papers_db.chunks c ON c.chunk_id = e.chunk_id
+            {where}
+            ORDER BY score DESC
+            LIMIT {max_results}
+        """
+        cur = con.execute(sql, params)
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        results = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            content = d.get("content") or ""
+            if len(content) > 600:
+                content = content[:600] + "..."
+            results.append({
+                "chunk_id": d["chunk_id"],
+                "arxiv_id": d["arxiv_id"],
+                "heading": d.get("heading") or "",
+                "page_start": d.get("page_start"),
+                "score": round(float(d["score"]), 4),
+                "snippet": content,
+            })
+        return json.dumps({
+            "query": query,
+            "model": EMBED_MODEL_NAME,
+            "count": len(results),
+            "results": results,
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"semantic_search failed: {e}"}, indent=2)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
