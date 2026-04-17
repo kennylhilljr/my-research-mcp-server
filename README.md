@@ -1,81 +1,233 @@
-# My Research MCP Server — Multi-Source Academic Search
+# My Research MCP Server
 
-An MCP server that searches across arXiv, Semantic Scholar, institutional repositories (MIT, Harvard, Cornell, Penn), OpenAlex, CORE, Crossref, cloud vendor docs, IAM documentation, and GitHub — downloads PDFs, extracts full text, indexes everything in SQLite FTS5, and provides DuckDB analytics and semantic vector search over your local paper library.
+A multi-source academic research platform built on the [Model Context Protocol](https://modelcontextprotocol.io/). Searches, downloads, indexes, and queries scholarly content from 13 source categories through 47 tools — backed by SQLite FTS5 full-text search, DuckDB analytics, and local semantic vector search.
+
+## Data Sources
+
+### Academic & Scholarly
+
+| Source | Domain | Scale | Description |
+|--------|--------|-------|-------------|
+| **arXiv** | arxiv.org | 2.4M+ preprints | Open-access preprints in physics, math, CS, biology, finance, and more. Full search + PDF download + indexing. |
+| **Semantic Scholar** | api.semanticscholar.org | 200M+ papers | Cross-repository search spanning arXiv, PubMed, ACM, IEEE, Springer, Elsevier, and thousands more. Citation graphs and open-access PDF links. |
+| **OpenAlex** | openalex.org | 250M+ works | Free CC0 catalog of scholarly works, authors, institutions, and concepts. Aggregates from Crossref, PubMed, institutional repos, and more. |
+| **CORE** | core.ac.uk | 200M+ works | Largest aggregator of open-access research from 11,000+ repositories worldwide. Best for technical reports, working papers, theses, and grey literature. |
+| **Crossref** | api.crossref.org | 150M+ works | DOI registration agency. Metadata for journal articles, conference proceedings, books, and datasets. Citation-formatted output (BibTeX, APA, RIS). |
+| **Unpaywall** | api.unpaywall.org | 50M+ OA articles | Open-access PDF discovery layer. Finds legal free PDFs for DOIs across publisher repos, preprint servers, and institutional archives. |
+
+### Institutional Repositories
+
+| Source | Domain | Scale | Description |
+|--------|--------|-------|-------------|
+| **MIT DSpace** | dspace.mit.edu | 60,000+ works | MIT's institutional repository. Theses, technical reports, white papers, and peer-reviewed articles across all departments. DSpace v6 REST API. |
+| **Harvard DASH** | dash.harvard.edu | 58,000+ works | Harvard's open-access repository. Articles, working papers, theses, and case studies. DSpace 8 REST API. |
+| **Cornell eCommons** | ecommons.cornell.edu | 24,000+ works | Cornell's institutional repository. Strong in CS, engineering, and policy research. Theses, articles, technical reports, datasets. DSpace 8 REST API. |
+| **Penn ScholarlyCommons** | repository.upenn.edu | 43,000+ works | UPenn's institutional repository. Articles, theses, datasets, and conference papers. Strong in AI ethics, governance, and policy. DSpace 8 REST API. |
+
+### Cloud Vendor Documentation
+
+| Source | Domain | Auth | Description |
+|--------|--------|------|-------------|
+| **AWS Docs** | docs.aws.amazon.com | None | Full-text search over AWS documentation. Uses the public search proxy that powers the AWS docs site. |
+| **Google Cloud Docs** | cloud.google.com | API key | Google Cloud documentation via the Developer Knowledge API. Chunked document search. |
+| **Microsoft Learn** | learn.microsoft.com | None | Microsoft Learn documentation, training, and reference content. Uses the public search endpoint. |
+
+### IAM & Identity Documentation
+
+Searched via Google Programmable Search Engine (PSE), Vertex AI Search, Brave Search, or SerpAPI. The PSE/Vertex corpus covers these 26 domains:
+
+| Category | Sites |
+|----------|-------|
+| **Identity Providers / Auth Servers** | keycloak.org, ory.sh, supertokens.com, authelia.com, goauthentik.io, zitadel.com, logto.io, casdoor.org, authgear.com, kanidm.github.io, freeipa.org, syncope.apache.org |
+| **Authorization Engines** | openpolicyagent.org, cerbos.dev, authzed.com (SpiceDB), casbin.org, permify.co, topaz.sh, warrant.dev |
+| **Zero-Trust / Proxies / Secrets** | pomerium.com, developer.hashicorp.com (Vault), infisical.com |
+| **Standards & Explainers** | webauthn.guide, jwt.io, datatracker.ietf.org, zanzibar.academy |
+
+Crawlable projects for local FTS indexing: Keycloak, Ory (Kratos/Hydra/Keto/Oathkeeper), Open Policy Agent, HashiCorp Vault, Apache Syncope, FreeIPA.
+
+### Code & Repositories
+
+| Source | Domain | Auth | Description |
+|--------|--------|------|-------------|
+| **GitHub Repos** | api.github.com | Optional | Search repositories by topic, language, stars. Token raises rate limit from 60 to 5,000 req/hr. |
+| **GitHub Code** | api.github.com | Required | Search code across all public repositories. Requires a GitHub PAT with public-repo read access. |
+
+---
 
 ## Architecture
 
+### System Context
+
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Data Sources                                │
-│  arXiv · Semantic Scholar · MIT DSpace · Harvard DASH               │
-│  Cornell eCommons · Penn ScholarlyCommons · OpenAlex · CORE         │
-│  Crossref/Unpaywall · AWS/GCP/MS Docs · IAM Docs · GitHub          │
-└─────────────────────┬───────────────────────────────────────────────┘
-                      │
-                      ▼
-┌──────────────┐     ┌──────────────┐     ┌──────────────────────┐
-│  Search APIs │────▶│  Download    │────▶│  PDF Text Extraction │
-│  (metadata)  │     │  PDFs        │     │  (PyMuPDF)           │
-└──────────────┘     └──────────────┘     └──────────┬───────────┘
-                                                     │
-                      ┌──────────────────────────────┤
-                      ▼                              ▼
-┌──────────────────────────────┐  ┌──────────────────────────────────┐
-│  SQLite FTS5 Index           │  │  DuckDB Analytics + Embeddings   │
-│  • papers table (metadata)   │  │  • Read-only SQL over SQLite     │
-│  • chunks table (text+pages) │  │  • Parquet/CSV/JSON datasets     │
-│  • chunks_fts (BM25 search)  │  │  • fastembed vectors (HNSW)      │
-└──────────────────────────────┘  └──────────────────────────────────┘
-                      ▲                              ▲
-                      └──────────────┬───────────────┘
-                                     │
-                              ┌──────┴──────┐
-                              │  MCP Client │
-                              │  (Claude)   │
-                              └─────────────┘
+                           ┌──────────────────────────┐
+                           │       MCP Client         │
+                           │   (Claude Desktop /      │
+                           │    Claude Code / IDE)     │
+                           └────────────┬─────────────┘
+                                        │ MCP Protocol
+                                        │ (stdio / SSE)
+                           ┌────────────▼─────────────┐
+                           │  My Research MCP Server   │
+                           │  ┌─────────────────────┐  │
+                           │  │  47 Tools (FastMCP)  │  │
+                           │  └─────────────────────┘  │
+                           └──┬────────┬──────────┬────┘
+                              │        │          │
+             ┌────────────────┤        │          ├────────────────┐
+             ▼                ▼        ▼          ▼                ▼
+      ┌──────────┐    ┌──────────┐  ┌─────┐  ┌────────┐   ┌──────────┐
+      │ Academic  │    │ Institu- │  │Cloud│  │  IAM   │   │  GitHub  │
+      │   APIs    │    │  tional  │  │Docs │  │  Docs  │   │   API    │
+      │          │    │  Repos   │  │     │  │        │   │          │
+      │ arXiv    │    │ MIT      │  │ AWS │  │ Google │   │ Repos    │
+      │ Sem.Sch. │    │ Harvard  │  │ GCP │  │  PSE / │   │ Code     │
+      │ OpenAlex │    │ Cornell  │  │ MS  │  │ Vertex │   │ READMEs  │
+      │ CORE     │    │ Penn     │  │Learn│  │ Brave  │   │          │
+      │ Crossref │    │          │  │     │  │ SerpAPI│   │          │
+      │ Unpaywall│    │          │  │     │  │        │   │          │
+      └──────────┘    └──────────┘  └─────┘  └────────┘   └──────────┘
 ```
 
-**Pipeline**: Search any source → Download PDF → Extract text (PyMuPDF) → Chunk with overlap & heading detection → Index in SQLite FTS5 → Query with BM25 ranking / DuckDB SQL / semantic vector search
+### Component Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        My Research MCP Server                          │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                         FastMCP Layer                             │  │
+│  │  47 @mcp.tool() functions — search, download, index, query, SQL  │  │
+│  └───────┬──────────┬──────────────┬──────────────┬─────────────────┘  │
+│          │          │              │              │                     │
+│          ▼          ▼              ▼              ▼                     │
+│  ┌─────────────┐ ┌────────┐ ┌──────────┐ ┌────────────────────────┐   │
+│  │  HTTP       │ │Paper   │ │ DuckDB   │ │  fastembed             │   │
+│  │  Clients    │ │Index   │ │ Engine   │ │  Embeddings            │   │
+│  │             │ │        │ │          │ │                        │   │
+│  │ requests    │ │SQLite  │ │Analytics │ │ ONNX model             │   │
+│  │ + rate      │ │FTS5    │ │SQL over  │ │ (BAAI/bge-small-en)    │   │
+│  │ limiters    │ │+ BM25  │ │SQLite +  │ │ HNSW cosine search     │   │
+│  │ (3s arXiv,  │ │        │ │datasets  │ │ in DuckDB              │   │
+│  │  1s S2,     │ │papers  │ │(Parquet, │ │                        │   │
+│  │  6.5s CORE) │ │chunks  │ │CSV, JSON)│ │ embeddings.duckdb      │   │
+│  └─────────────┘ │chunks_ │ └──────────┘ └────────────────────────┘   │
+│                  │fts     │                                            │
+│                  └────────┘                                            │
+│                                                                         │
+│                  ┌────────────────────────────────────────────────┐     │
+│                  │                 Filesystem                     │     │
+│                  │  ~/arxiv-papers/            (PDFs + SQLite DB) │     │
+│                  │  ~/research-datasets/       (Parquet/CSV/JSON) │     │
+│                  └────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Sequence: Search → Download → Index → Query
+
+```
+MCP Client          MCP Server             External API        Filesystem
+    │                    │                       │                  │
+    │  search_arxiv()    │                       │                  │
+    │───────────────────>│   GET /api/query      │                  │
+    │                    │──────────────────────->│                  │
+    │                    │   Atom XML response    │                  │
+    │                    │<──────────────────────-│                  │
+    │   JSON results     │                       │                  │
+    │<───────────────────│                       │                  │
+    │                    │                       │                  │
+    │  download_paper()  │                       │                  │
+    │───────────────────>│   GET /pdf/{id}       │                  │
+    │                    │──────────────────────->│                  │
+    │                    │   PDF bytes (stream)   │                  │
+    │                    │<──────────────────────-│                  │
+    │                    │                       │   Write PDF      │
+    │                    │                       │─────────────────>│
+    │                    │                       │                  │
+    │                    │──── PyMuPDF extract ──────────────────-->│
+    │                    │<─── pages[] ────────────────────────────-│
+    │                    │                       │                  │
+    │                    │──── chunk_pages() ────>│                  │
+    │                    │──── SQLite upsert ────────────────────-->│
+    │   JSON (indexed)   │                       │                  │
+    │<───────────────────│                       │                  │
+    │                    │                       │                  │
+    │  query_papers()    │                       │                  │
+    │───────────────────>│                       │                  │
+    │                    │── FTS5 MATCH query ──────────────────-->│
+    │                    │<── BM25-ranked rows ────────────────────│
+    │   JSON results     │                       │                  │
+    │<───────────────────│                       │                  │
+```
+
+### Sequence: Semantic Vector Search
+
+```
+MCP Client          MCP Server             fastembed            DuckDB
+    │                    │                       │                  │
+    │  embed_chunks()    │                       │                  │
+    │───────────────────>│                       │                  │
+    │                    │── fetch unembedded ──────────────────-->│
+    │                    │<── chunk texts ─────────────────────────│
+    │                    │   encode(texts)        │                  │
+    │                    │──────────────────────->│                  │
+    │                    │   float[][] vectors    │                  │
+    │                    │<──────────────────────-│                  │
+    │                    │── INSERT embeddings ─────────────────-->│
+    │   JSON (count)     │                       │                  │
+    │<───────────────────│                       │                  │
+    │                    │                       │                  │
+    │ semantic_search()  │                       │                  │
+    │───────────────────>│   encode(query)       │                  │
+    │                    │──────────────────────->│                  │
+    │                    │   query vector         │                  │
+    │                    │<──────────────────────-│                  │
+    │                    │── cosine similarity ─────────────────-->│
+    │                    │<── ranked chunks ───────────────────────│
+    │   JSON results     │                       │                  │
+    │<───────────────────│                       │                  │
+```
+
+---
 
 ## Tools (47 total)
 
-### arXiv API
+### arXiv API (2 tools)
 | Tool | Description |
 |------|-------------|
-| `search_arxiv` | Search arXiv's catalog with full query syntax |
+| `search_arxiv` | Search arXiv's catalog with full query syntax (`ti:`, `au:`, `cat:`, `all:`) |
 | `get_paper_metadata` | Fetch metadata by arXiv ID |
 
-### Download & Index
+### Download & Index (3 tools)
 | Tool | Description |
 |------|-------------|
-| `download_paper` | Download arXiv PDF + auto-index full text |
+| `download_paper` | Download PDF from arXiv + auto-index full text |
 | `index_paper` | Manually index/re-index a single paper |
 | `index_all_papers` | Batch-index all PDFs in the download directory |
 
-### Full-Text Search
+### Full-Text Search (2 tools)
 | Tool | Description |
 |------|-------------|
 | `query_papers` | **Full-text search across all indexed paper content** — finds specific passages, methods, results, equations |
 | `get_paper_text` | Retrieve full text or specific pages of an indexed paper |
 
-### Management
+### Management (3 tools)
 | Tool | Description |
 |------|-------------|
 | `list_indexed_papers` | List all papers in the index with stats |
 | `remove_paper` | Remove a paper from the index |
 | `index_stats` | Get index statistics |
 
-### Semantic Scholar
+### Semantic Scholar (2 tools)
 | Tool | Description |
 |------|-------------|
-| `search_semantic_scholar` | Cross-repository search across arXiv, PubMed, ACM, IEEE, Springer, etc. |
-| `get_semantic_scholar_paper` | Get detailed metadata, citations, and open-access PDF links |
+| `search_semantic_scholar` | Cross-repository search across arXiv, PubMed, ACM, IEEE, Springer, and more |
+| `get_semantic_scholar_paper` | Get detailed metadata, citations, and open-access PDF links by paper ID or DOI |
 
-### Institutional Repositories
+### Institutional Repositories (8 tools)
 | Tool | Description |
 |------|-------------|
 | `search_mit_dspace` | Search MIT's 60,000+ works (theses, reports, articles) |
-| `get_mit_dspace_item` | Get full metadata for an MIT DSpace item |
+| `get_mit_dspace_item` | Get full metadata + downloadable files for an MIT DSpace item |
 | `search_harvard_dash` | Search Harvard's 58,000+ open-access works |
 | `get_harvard_dash_item` | Get full metadata for a Harvard DASH item |
 | `search_cornell_ecommons` | Search Cornell's 24,000+ works (CS, engineering, policy) |
@@ -83,7 +235,7 @@ An MCP server that searches across arXiv, Semantic Scholar, institutional reposi
 | `search_penn_scholarly` | Search UPenn's 43,000+ works (AI ethics, governance) |
 | `get_penn_scholarly_item` | Get full metadata for a Penn ScholarlyCommons item |
 
-### DOI / Crossref
+### DOI / Crossref (4 tools)
 | Tool | Description |
 |------|-------------|
 | `resolve_doi` | Resolve a DOI to full metadata via Crossref + DataCite |
@@ -91,44 +243,44 @@ An MCP server that searches across arXiv, Semantic Scholar, institutional reposi
 | `get_doi_citation` | Get formatted citation (BibTeX, APA, RIS, etc.) via content negotiation |
 | `download_paper_by_doi` | Find and download open-access PDF by DOI (Unpaywall + Semantic Scholar) |
 
-### OpenAlex
+### OpenAlex (3 tools)
 | Tool | Description |
 |------|-------------|
 | `search_openalex` | Search 250M+ works in OpenAlex (free, CC0 catalog) |
 | `get_openalex_work` | Get full metadata for an OpenAlex work |
 | `search_openalex_authors` | Search for authors with publication stats |
 
-### CORE
+### CORE (3 tools)
 | Tool | Description |
 |------|-------------|
 | `search_core` | Search 200M+ open-access works from 11,000+ repositories |
 | `get_core_work` | Get full metadata for a CORE work |
 | `download_core_paper` | Download PDF from CORE + auto-index |
 
-### Cloud Vendor Documentation
+### Cloud Vendor Documentation (4 tools)
 | Tool | Description |
 |------|-------------|
-| `search_aws_docs` | Search official AWS documentation |
-| `search_gcp_docs` | Search Google Cloud documentation (requires API key) |
-| `search_microsoft_docs` | Search Microsoft Learn documentation |
-| `fetch_cloud_doc_page` | Fetch and extract text from a cloud doc page |
+| `search_aws_docs` | Search official AWS documentation (docs.aws.amazon.com) |
+| `search_gcp_docs` | Search Google Cloud documentation via Developer Knowledge API |
+| `search_microsoft_docs` | Search Microsoft Learn documentation (learn.microsoft.com) |
+| `fetch_cloud_doc_page` | Fetch and extract plain text from a cloud documentation page |
 
-### IAM Documentation
+### IAM Documentation (4 tools)
 | Tool | Description |
 |------|-------------|
-| `search_iam_docs` | Live search across ~23 OSS IAM doc sites (Keycloak, Ory, OPA, etc.) |
-| `index_iam_project` | Crawl and index an IAM project's docs for full-text search |
+| `search_iam_docs` | Live search across 26 OSS IAM documentation sites (see Data Sources table) |
+| `index_iam_project` | Crawl and index an IAM project's docs for offline full-text search |
 | `search_iam_index` | Search locally indexed IAM documentation |
-| `list_iam_indexed` | List all indexed IAM projects |
+| `list_iam_indexed` | List all indexed IAM projects with stats |
 
-### GitHub
+### GitHub (3 tools)
 | Tool | Description |
 |------|-------------|
 | `search_github_repos` | Search GitHub repositories by topic, language, stars |
-| `search_github_code` | Search code across public repos (requires token) |
-| `fetch_github_readme` | Fetch a repository's README |
+| `search_github_code` | Search code across public repos (requires GITHUB_TOKEN) |
+| `fetch_github_readme` | Fetch a repository's README as plain text |
 
-### Analytics & Embeddings
+### Analytics & Embeddings (6 tools)
 | Tool | Description |
 |------|-------------|
 | `analytics_sql` | Run read-only SQL over the paper index via DuckDB |
@@ -136,7 +288,9 @@ An MCP server that searches across arXiv, Semantic Scholar, institutional reposi
 | `dataset_query` | Run SQL over external dataset files via DuckDB |
 | `embedding_stats` | Show embedding coverage stats |
 | `embed_chunks` | Embed paper chunks with local ONNX model (fastembed) |
-| `semantic_search` | Vector similarity search over embedded chunks |
+| `semantic_search` | Vector similarity search over embedded paper chunks |
+
+---
 
 ## Quick Start
 
@@ -246,16 +400,14 @@ reinforc*                               # prefix matching
 ## Example Session
 
 ```
-You: Search arXiv for papers on "policy-as-code" in software engineering
+You: Search for papers on "policy-as-code" across multiple sources
   -> search_arxiv("all:policy-as-code", category="cs.SE")
-
-You: Also check Semantic Scholar and OpenAlex for broader coverage
   -> search_semantic_scholar("policy-as-code", fields_of_study="Computer Science")
   -> search_openalex("policy-as-code")
 
 You: Download the top result and that DOI from the Crossref hit
-  -> download_paper("2401.xxxxx")    # auto-indexes full text
-  -> download_paper_by_doi("10.1145/3649835")
+  -> download_paper("2401.xxxxx")              # arXiv PDF, auto-indexed
+  -> download_paper_by_doi("10.1145/3649835")  # OA PDF via Unpaywall
 
 You: What do these papers say about OPA Rego validation?
   -> query_papers("OPA Rego validation")
@@ -264,11 +416,16 @@ You: What do these papers say about OPA Rego validation?
 You: Search the OPA docs for Rego policy testing
   -> search_iam_docs("Rego policy testing")
 
+You: Check how AWS and Azure handle policy-as-code
+  -> search_aws_docs("policy as code CloudFormation Guard")
+  -> search_microsoft_docs("Azure Policy definition")
+
 You: Run some analytics on my indexed papers
-  -> analytics_sql("SELECT COUNT(*) AS total, SUBSTR(published,1,4) AS year FROM papers_db.papers GROUP BY 2 ORDER BY 2 DESC")
+  -> analytics_sql("SELECT SUBSTR(published,1,4) AS year, COUNT(*) AS n
+                     FROM papers_db.papers GROUP BY 1 ORDER BY 1 DESC")
 
 You: Find semantically similar passages to "access control policy evaluation"
-  -> embed_chunks()           # embed any new chunks
+  -> embed_chunks()
   -> semantic_search("access control policy evaluation")
 ```
 
