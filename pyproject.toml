@@ -5,6 +5,7 @@ description = "MCP server for multi-source academic research: arXiv, Semantic Sc
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
+authors = [{name = "Kenny Hill Jr"}]
 keywords = ["mcp", "arxiv", "research", "pdf", "full-text-search", "semantic-scholar", "dspace", "openalex", "crossref", "doi", "core", "cloud-docs", "iam", "duckdb", "embeddings"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -35,6 +36,11 @@ dev = [
 
 [project.scripts]
 my-research-mcp = "server:mcp.run"
+
+[project.urls]
+Repository = "https://github.com/kennylhilljr/my-research-mcp-server"
+Issues = "https://github.com/kennylhilljr/my-research-mcp-server/issues"
+Changelog = "https://github.com/kennylhilljr/my-research-mcp-server/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["setuptools>=68.0"]

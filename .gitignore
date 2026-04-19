@@ -13,6 +13,22 @@ venv/
 # macOS
 .DS_Store
 
+# Testing & Coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Linting
+.ruff_cache/
+
+# Type checking
+.mypy_cache/
+
+# Build artifacts
+dist/
+build/
+
 # Local data
 *.db
 *.db-wal

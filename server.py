@@ -3,13 +3,18 @@
 My Research MCP Server — Multi-Source Academic Search
 =====================================================
 An MCP server that lets you:
-  - Search arXiv, Semantic Scholar, Harvard DASH, MIT DSpace,
-    Cornell eCommons, and Penn ScholarlyCommons
-  - Download paper PDFs from any source
-  - Extract & index full text from every PDF
+  - Search arXiv, Semantic Scholar, OpenAlex, CORE, Crossref,
+    Harvard DASH, MIT DSpace, Cornell eCommons, Penn ScholarlyCommons
+  - Download paper PDFs from any source (arXiv, DOI via Unpaywall, CORE)
+  - Extract & index full text from every PDF (SQLite FTS5 + BM25)
   - Query across the full content of your entire local paper library
+  - Search cloud vendor docs (AWS, GCP, Microsoft Learn)
+  - Search & index IAM/identity documentation (26 OSS projects)
+  - Search GitHub repos and code for implementations
+  - Run SQL analytics over the paper index via DuckDB
+  - Embed paper chunks and run semantic vector search (fastembed + HNSW)
 
-Dependencies:  pip install mcp requests pymupdf
+Dependencies:  pip install mcp requests pymupdf duckdb google-auth fastembed
 """
 
 import os
@@ -26,6 +31,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import fitz  # PyMuPDF
 import requests
@@ -52,6 +58,14 @@ NS = {
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("arxiv-mcp")
+
+
+def _safe_json_loads(raw, default=None):
+    """Parse JSON with a fallback for corrupt or missing data."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return default if default is not None else []
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -202,7 +216,7 @@ class PaperIndex:
 
     def search(self, query: str, limit: int = 20, arxiv_ids: list = None) -> list:
         """Full-text search across all indexed paper content."""
-        fts_query = self._to_fts_query(query)
+        fts_query = self.to_fts_query(query)
 
         if arxiv_ids:
             placeholders = ",".join("?" for _ in arxiv_ids)
@@ -241,7 +255,7 @@ class PaperIndex:
             results.append({
                 "arxiv_id": row["arxiv_id"],
                 "title": row["title"],
-                "authors": json.loads(row["authors"]),
+                "authors": _safe_json_loads(row["authors"]),
                 "page_start": row["page_start"],
                 "page_end": row["page_end"],
                 "heading": row["heading"],
@@ -280,7 +294,7 @@ class PaperIndex:
         return {
             "arxiv_id": arxiv_id,
             "title": paper["title"],
-            "authors": json.loads(paper["authors"]),
+            "authors": _safe_json_loads(paper["authors"]),
             "abstract": paper["abstract"],
             "total_pages": paper["total_pages"],
             "indexed_at": paper["indexed_at"],
@@ -309,8 +323,8 @@ class PaperIndex:
             {
                 "arxiv_id": r["arxiv_id"],
                 "title": r["title"],
-                "authors": json.loads(r["authors"]),
-                "categories": json.loads(r["categories"]),
+                "authors": _safe_json_loads(r["authors"]),
+                "categories": _safe_json_loads(r["categories"]),
                 "published": r["published"],
                 "total_pages": r["total_pages"],
                 "chunk_count": r["chunk_count"],
@@ -334,7 +348,7 @@ class PaperIndex:
         }
 
     @staticmethod
-    def _to_fts_query(query: str) -> str:
+    def to_fts_query(query: str) -> str:
         """Convert natural language to FTS5 query."""
         q = query.strip()
         # Pass through queries that already use FTS5 syntax
@@ -355,13 +369,12 @@ class PaperIndex:
 
 def extract_text_from_pdf(pdf_path: str) -> list:
     """Extract text page-by-page from a PDF using PyMuPDF."""
-    doc = fitz.open(pdf_path)
     pages = []
-    for i, page in enumerate(doc):
-        text = page.get_text("text")
-        if text.strip():
-            pages.append({"page": i + 1, "text": text})
-    doc.close()
+    with fitz.open(pdf_path) as doc:
+        for i, page in enumerate(doc):
+            text = page.get_text("text")
+            if text.strip():
+                pages.append({"page": i + 1, "text": text})
     return pages
 
 
@@ -718,7 +731,8 @@ def index_paper(arxiv_id: str, pdf_path: str = None,
         meta_resp.raise_for_status()
         meta = _parse_feed(meta_resp.text)
         paper_meta = meta["entries"][0] if meta["entries"] else {"arxiv_id": arxiv_id}
-    except Exception:
+    except Exception as e:
+        logger.debug("arXiv metadata fetch skipped for %s: %s", arxiv_id, e)
         paper_meta = {"arxiv_id": arxiv_id}
 
     pages = extract_text_from_pdf(pdf_path)
@@ -766,7 +780,8 @@ def index_all_papers(download_dir: str = None) -> str:
                 meta_resp.raise_for_status()
                 meta = _parse_feed(meta_resp.text)
                 paper_meta = meta["entries"][0] if meta["entries"] else {"arxiv_id": arxiv_id}
-            except Exception:
+            except Exception as e:
+                logger.debug("arXiv metadata fetch skipped for %s: %s", arxiv_id, e)
                 paper_meta = {"arxiv_id": arxiv_id}
 
             pages = extract_text_from_pdf(str(pdf_file))
@@ -1337,8 +1352,8 @@ def _dspace8_get_item(repo_key: str, uuid: str) -> dict:
                         )[0].get("value", "") if b.get("metadata") else "",
                         "retrieve_link": f"{api_base}/core/bitstreams/{b['uuid']}/content",
                     })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Bitstream fetch skipped: %s", e)
 
     result = _dspace8_parse_item(item, repo["web_base"])
     result["bitstreams"] = bitstreams
@@ -1437,6 +1452,17 @@ DATACITE_API_BASE = "https://api.datacite.org/dois"
 UNPAYWALL_API_BASE = "https://api.unpaywall.org/v2"
 UNPAYWALL_EMAIL = os.environ.get("UNPAYWALL_EMAIL", "research-mcp@example.com")
 
+_DOI_PREFIXES = ["https://doi.org/", "http://doi.org/", "doi:"]
+
+
+def _clean_doi(doi: str) -> str:
+    """Strip common URL/scheme prefixes from a DOI string."""
+    doi = doi.strip()
+    for prefix in _DOI_PREFIXES:
+        if doi.lower().startswith(prefix.lower()):
+            doi = doi[len(prefix):]
+    return doi
+
 
 def _parse_crossref(item: dict) -> dict:
     """Parse a Crossref work item into a clean dict."""
@@ -1493,11 +1519,7 @@ def resolve_doi(doi: str) -> str:
     Returns:
         JSON with full metadata from Crossref or DataCite.
     """
-    # Clean the DOI
-    doi = doi.strip()
-    for prefix in ["https://doi.org/", "http://doi.org/", "doi:"]:
-        if doi.lower().startswith(prefix.lower()):
-            doi = doi[len(prefix):]
+    doi = _clean_doi(doi)
 
     # Try Crossref first (covers most scholarly articles)
     try:
@@ -1628,10 +1650,7 @@ def get_doi_citation(
     Returns:
         The formatted citation string or JSON.
     """
-    doi = doi.strip()
-    for prefix in ["https://doi.org/", "http://doi.org/", "doi:"]:
-        if doi.lower().startswith(prefix.lower()):
-            doi = doi[len(prefix):]
+    doi = _clean_doi(doi)
 
     mime_map = {
         "text": f"text/x-bibliography; style={style}",
@@ -1677,10 +1696,7 @@ def download_paper_by_doi(
         JSON with file path, metadata, and indexing status.
         If no open-access PDF exists, returns an error with the DOI metadata.
     """
-    doi = doi.strip()
-    for prefix in ["https://doi.org/", "http://doi.org/", "doi:"]:
-        if doi.lower().startswith(prefix.lower()):
-            doi = doi[len(prefix):]
+    doi = _clean_doi(doi)
 
     # Step 1: Get metadata from Crossref
     metadata = {}
@@ -1692,8 +1708,8 @@ def download_paper_by_doi(
         )
         if cr_resp.status_code == 200:
             metadata = _parse_crossref(cr_resp.json().get("message", {}))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Crossref metadata fetch skipped: %s", e)
 
     # Step 2: Find open-access PDF via multiple sources
     pdf_url = None
@@ -2508,7 +2524,10 @@ def fetch_cloud_doc_page(url: str, max_chars: int = 20000) -> str:
         "cloud.google.com",
         "learn.microsoft.com",
     )
-    if not any(host in url for host in allowed):
+    parsed = urlparse(url)
+    if not any(
+        parsed.netloc == host or parsed.netloc.endswith("." + host) for host in allowed
+    ):
         return json.dumps({
             "error": f"URL must be on one of: {', '.join(allowed)}",
             "url": url,
@@ -2907,7 +2926,8 @@ def _resolve_project_urls(cfg: dict) -> list[str]:
                     rr = requests.get(nu, timeout=30)
                     rr.raise_for_status()
                     expanded.extend(_parse_sitemap(rr.text))
-                except Exception:
+                except Exception as e:
+                    logger.debug("Nested sitemap fetch skipped for %s: %s", nu, e)
                     continue
             urls = expanded
     elif "seed_urls" in cfg:
@@ -2922,7 +2942,8 @@ def _resolve_project_urls(cfg: dict) -> list[str]:
                     )
                     r.raise_for_status()
                     urls.extend(_extract_links(r.text, seed))
-                except Exception:
+                except Exception as e:
+                    logger.debug("Seed URL crawl skipped for %s: %s", seed, e)
                     continue
     else:
         raise RuntimeError("Project config has neither 'sitemap' nor 'seed_urls'.")
@@ -3039,7 +3060,7 @@ def search_iam_index(query: str, project: str = "", max_results: int = 20) -> st
             }, indent=2)
         sql_prefix = f"iam:{project}:%"
 
-    fts_query = idx._to_fts_query(query)
+    fts_query = idx.to_fts_query(query)
     rows = idx.conn.execute("""
         SELECT c.arxiv_id, c.heading, c.content, c.chunk_index,
                p.title, p.pdf_path AS url, rank

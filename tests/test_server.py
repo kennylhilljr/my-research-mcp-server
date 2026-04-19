@@ -13,26 +13,28 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import (
     PaperIndex,
+    _clamp,
+    _dspace8_parse_item,
+    _dspace_parse_item,
+    _ensure_read_only_sql,
+    _extract_links,
+    _extract_main_text,
+    _get_download_dir,
+    _iam_docs_sites_query,
+    _index_downloaded_pdf,
+    _make_rate_limiter,
+    _openalex_abstract,
+    _parse_core_work,
+    _parse_crossref,
+    _parse_feed,
+    _parse_openalex_work,
+    _parse_sitemap,
+    _safe_json_loads,
     chunk_pages,
     compute_content_hash,
     detect_heading,
-    _clamp,
-    _make_rate_limiter,
-    _index_downloaded_pdf,
-    _parse_feed,
-    _parse_crossref,
-    _parse_openalex_work,
-    _openalex_abstract,
-    _parse_core_work,
-    _dspace_parse_item,
-    _dspace8_parse_item,
-    _ensure_read_only_sql,
-    _extract_main_text,
-    _parse_sitemap,
-    _extract_links,
-    _iam_docs_sites_query,
-    _get_download_dir,
     extract_text_from_pdf,
+    fetch_cloud_doc_page,
 )
 
 
@@ -548,32 +550,32 @@ class TestAtomParsing:
 
 class TestFTSQueryBuilder:
     def test_single_word(self):
-        assert PaperIndex._to_fts_query("attention") == "attention"
+        assert PaperIndex.to_fts_query("attention") == "attention"
 
     def test_multi_word_becomes_and(self):
-        result = PaperIndex._to_fts_query("attention mechanism")
+        result = PaperIndex.to_fts_query("attention mechanism")
         assert "AND" in result
 
     def test_passthrough_boolean(self):
         q = "attention AND NOT recurrence"
-        assert PaperIndex._to_fts_query(q) == q
+        assert PaperIndex.to_fts_query(q) == q
 
     def test_passthrough_phrase(self):
         q = '"self-supervised learning"'
-        assert PaperIndex._to_fts_query(q) == q
+        assert PaperIndex.to_fts_query(q) == q
 
     def test_passthrough_wildcard(self):
         q = "transform*"
-        assert PaperIndex._to_fts_query(q) == q
+        assert PaperIndex.to_fts_query(q) == q
 
     def test_or_passthrough(self):
         q = "attention OR transformer"
-        assert PaperIndex._to_fts_query(q) == q
+        assert PaperIndex.to_fts_query(q) == q
 
     def test_near_is_preserved(self):
         """NEAR syntax should keep the NEAR keyword."""
         q = "NEAR(policy gradient, 10)"
-        result = PaperIndex._to_fts_query(q)
+        result = PaperIndex.to_fts_query(q)
         assert "NEAR" in result
 
 
@@ -1416,3 +1418,124 @@ class TestPaperIndexEdgeCases:
             {"content": "test", "page_start": 1, "page_end": 1, "heading": ""},
         ], "/tmp/s.pdf", 1, "sh")
         assert db2.is_indexed("shared:001")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NEW TESTS — _safe_json_loads, URL validation, PDF context manager
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestSafeJsonLoads:
+    def test_valid_json_list(self):
+        assert _safe_json_loads('["a", "b"]') == ["a", "b"]
+
+    def test_valid_json_dict(self):
+        assert _safe_json_loads('{"key": 1}') == {"key": 1}
+
+    def test_invalid_json_returns_default_list(self):
+        assert _safe_json_loads("not json") == []
+
+    def test_none_input_returns_default_list(self):
+        assert _safe_json_loads(None) == []
+
+    def test_default_override(self):
+        assert _safe_json_loads("bad", default={}) == {}
+
+    def test_empty_string(self):
+        assert _safe_json_loads("") == []
+
+    def test_valid_json_string(self):
+        assert _safe_json_loads('"hello"') == "hello"
+
+    def test_valid_json_number(self):
+        assert _safe_json_loads("42") == 42
+
+
+class TestUrlValidation:
+    """Test that fetch_cloud_doc_page rejects URLs not on allowed hosts."""
+
+    @patch("server.requests.get")
+    def test_rejects_evil_domain_with_allowed_in_path(self, mock_get):
+        """A URL like https://evil.com/docs.aws.amazon.com/ must be rejected."""
+        result = fetch_cloud_doc_page("https://evil.com/docs.aws.amazon.com/foo")
+        assert "error" in result
+        mock_get.assert_not_called()
+
+    @patch("server.requests.get")
+    def test_rejects_subdomain_trick(self, mock_get):
+        """A URL like https://docs.aws.amazon.com.evil.com/ must be rejected."""
+        result = fetch_cloud_doc_page("https://docs.aws.amazon.com.evil.com/page")
+        assert "error" in result
+        mock_get.assert_not_called()
+
+    @patch("server.requests.get")
+    def test_accepts_valid_aws_url(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<html><head><title>AWS</title></head><body>Content</body></html>"
+        mock_get.return_value = mock_resp
+        result = fetch_cloud_doc_page("https://docs.aws.amazon.com/IAM/latest/")
+        assert "error" not in result
+
+    @patch("server.requests.get")
+    def test_accepts_valid_gcp_url(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<html><head><title>GCP</title></head><body>Content</body></html>"
+        mock_get.return_value = mock_resp
+        result = fetch_cloud_doc_page("https://cloud.google.com/iam/docs/overview")
+        assert "error" not in result
+
+    @patch("server.requests.get")
+    def test_rejects_empty_url(self, mock_get):
+        result = fetch_cloud_doc_page("")
+        assert "error" in result
+        mock_get.assert_not_called()
+
+
+class TestExtractTextFromPdfContextManager:
+    """Verify extract_text_from_pdf uses a context manager for cleanup."""
+
+    @patch("server.fitz.open")
+    def test_context_manager_exit_called_on_success(self, mock_fitz_open):
+        mock_doc = MagicMock()
+        mock_page = MagicMock()
+        mock_page.get_text.return_value = "Hello world"
+        mock_doc.__enter__ = MagicMock(return_value=mock_doc)
+        mock_doc.__exit__ = MagicMock(return_value=False)
+        mock_doc.__iter__ = MagicMock(return_value=iter([mock_page]))
+        mock_fitz_open.return_value = mock_doc
+
+        result = extract_text_from_pdf("/fake/path.pdf")
+        assert len(result) == 1
+        assert result[0]["text"] == "Hello world"
+        mock_doc.__exit__.assert_called_once()
+
+    @patch("server.fitz.open")
+    def test_context_manager_exit_called_on_error(self, mock_fitz_open):
+        mock_doc = MagicMock()
+        mock_doc.__enter__ = MagicMock(return_value=mock_doc)
+        mock_doc.__exit__ = MagicMock(return_value=False)
+        mock_doc.__iter__ = MagicMock(side_effect=RuntimeError("mid-iteration error"))
+        mock_fitz_open.return_value = mock_doc
+
+        with pytest.raises(RuntimeError, match="mid-iteration"):
+            extract_text_from_pdf("/fake/path.pdf")
+        mock_doc.__exit__.assert_called_once()
+
+    @patch("server.fitz.open")
+    def test_empty_pages_skipped(self, mock_fitz_open):
+        mock_doc = MagicMock()
+        page1 = MagicMock()
+        page1.get_text.return_value = "   "
+        page2 = MagicMock()
+        page2.get_text.return_value = "Real content"
+        mock_doc.__enter__ = MagicMock(return_value=mock_doc)
+        mock_doc.__exit__ = MagicMock(return_value=False)
+        mock_doc.__iter__ = MagicMock(return_value=iter([page1, page2]))
+        mock_fitz_open.return_value = mock_doc
+
+        result = extract_text_from_pdf("/fake/path.pdf")
+        assert len(result) == 1
+        assert result[0]["page"] == 2
+        assert result[0]["text"] == "Real content"

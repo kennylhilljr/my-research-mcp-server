@@ -1,6 +1,18 @@
 # My Research MCP Server
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io/)
+[![Tools](https://img.shields.io/badge/tools-47-orange.svg)](#tools-47-total)
+
 A multi-source academic research platform built on the [Model Context Protocol](https://modelcontextprotocol.io/). Searches, downloads, indexes, and queries scholarly content from 13 source categories through 47 tools — backed by SQLite FTS5 full-text search, DuckDB analytics, and local semantic vector search.
+
+## Prerequisites
+
+- **Python 3.10+** (3.11 or 3.12 recommended)
+- **pip** or a package manager like `uv`
+- ~200 MB disk space for the fastembed ONNX model (downloaded on first use of `embed_chunks`)
+- Optional: API keys for enhanced functionality (see [Environment Variables](#environment-variables))
 
 ## Data Sources
 
@@ -58,133 +70,96 @@ Crawlable projects for local FTS indexing: Keycloak, Ory (Kratos/Hydra/Keto/Oath
 
 ### System Context
 
-```
-                           ┌──────────────────────────┐
-                           │       MCP Client         │
-                           │   (Claude Desktop /      │
-                           │    Claude Code / IDE)     │
-                           └────────────┬─────────────┘
-                                        │ MCP Protocol
-                                        │ (stdio / SSE)
-                           ┌────────────▼─────────────┐
-                           │  My Research MCP Server   │
-                           │  ┌─────────────────────┐  │
-                           │  │  47 Tools (FastMCP)  │  │
-                           │  └─────────────────────┘  │
-                           └──┬────────┬──────────┬────┘
-                              │        │          │
-             ┌────────────────┤        │          ├────────────────┐
-             ▼                ▼        ▼          ▼                ▼
-      ┌──────────┐    ┌──────────┐  ┌─────┐  ┌────────┐   ┌──────────┐
-      │ Academic  │    │ Institu- │  │Cloud│  │  IAM   │   │  GitHub  │
-      │   APIs    │    │  tional  │  │Docs │  │  Docs  │   │   API    │
-      │          │    │  Repos   │  │     │  │        │   │          │
-      │ arXiv    │    │ MIT      │  │ AWS │  │ Google │   │ Repos    │
-      │ Sem.Sch. │    │ Harvard  │  │ GCP │  │  PSE / │   │ Code     │
-      │ OpenAlex │    │ Cornell  │  │ MS  │  │ Vertex │   │ READMEs  │
-      │ CORE     │    │ Penn     │  │Learn│  │ Brave  │   │          │
-      │ Crossref │    │          │  │     │  │ SerpAPI│   │          │
-      │ Unpaywall│    │          │  │     │  │        │   │          │
-      └──────────┘    └──────────┘  └─────┘  └────────┘   └──────────┘
+```mermaid
+graph TD
+    Client["MCP Client<br/>(Claude Desktop / Claude Code / IDE)"]
+    Server["My Research MCP Server<br/>47 Tools (FastMCP)"]
+
+    Client -->|"MCP Protocol<br/>(stdio / SSE)"| Server
+
+    Server --> Academic["Academic APIs<br/>arXiv, Semantic Scholar,<br/>OpenAlex, CORE,<br/>Crossref, Unpaywall"]
+    Server --> Institutional["Institutional Repos<br/>MIT, Harvard,<br/>Cornell, Penn"]
+    Server --> Cloud["Cloud Docs<br/>AWS, GCP,<br/>MS Learn"]
+    Server --> IAM["IAM Docs<br/>Google PSE / Vertex /<br/>Brave / SerpAPI"]
+    Server --> GitHub["GitHub API<br/>Repos, Code,<br/>READMEs"]
 ```
 
 ### Component Diagram
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        My Research MCP Server                          │
-│                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │                         FastMCP Layer                             │  │
-│  │  47 @mcp.tool() functions — search, download, index, query, SQL  │  │
-│  └───────┬──────────┬──────────────┬──────────────┬─────────────────┘  │
-│          │          │              │              │                     │
-│          ▼          ▼              ▼              ▼                     │
-│  ┌─────────────┐ ┌────────┐ ┌──────────┐ ┌────────────────────────┐   │
-│  │  HTTP       │ │Paper   │ │ DuckDB   │ │  fastembed             │   │
-│  │  Clients    │ │Index   │ │ Engine   │ │  Embeddings            │   │
-│  │             │ │        │ │          │ │                        │   │
-│  │ requests    │ │SQLite  │ │Analytics │ │ ONNX model             │   │
-│  │ + rate      │ │FTS5    │ │SQL over  │ │ (BAAI/bge-small-en)    │   │
-│  │ limiters    │ │+ BM25  │ │SQLite +  │ │ HNSW cosine search     │   │
-│  │ (3s arXiv,  │ │        │ │datasets  │ │ in DuckDB              │   │
-│  │  1s S2,     │ │papers  │ │(Parquet, │ │                        │   │
-│  │  6.5s CORE) │ │chunks  │ │CSV, JSON)│ │ embeddings.duckdb      │   │
-│  └─────────────┘ │chunks_ │ └──────────┘ └────────────────────────┘   │
-│                  │fts     │                                            │
-│                  └────────┘                                            │
-│                                                                         │
-│                  ┌────────────────────────────────────────────────┐     │
-│                  │                 Filesystem                     │     │
-│                  │  ~/arxiv-papers/            (PDFs + SQLite DB) │     │
-│                  │  ~/research-datasets/       (Parquet/CSV/JSON) │     │
-│                  └────────────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Server["My Research MCP Server"]
+        FastMCP["FastMCP Layer<br/>47 @mcp.tool() functions"]
+
+        FastMCP --> HTTP["HTTP Clients<br/>requests + rate limiters<br/>(3s arXiv, 1s S2, 6.5s CORE)"]
+        FastMCP --> PaperIndex["Paper Index<br/>SQLite FTS5 + BM25<br/>papers, chunks, chunks_fts"]
+        FastMCP --> DuckDB["DuckDB Engine<br/>Analytics SQL over<br/>SQLite + datasets<br/>(Parquet, CSV, JSON)"]
+        FastMCP --> Embed["fastembed Embeddings<br/>ONNX model (BAAI/bge-small-en)<br/>HNSW cosine search<br/>in DuckDB"]
+    end
+
+    subgraph FS["Filesystem"]
+        PDFs["~/arxiv-papers/<br/>(PDFs + SQLite DB)"]
+        Datasets["~/research-datasets/<br/>(Parquet/CSV/JSON)"]
+    end
+
+    PaperIndex --> PDFs
+    DuckDB --> Datasets
+    Embed --> PDFs
 ```
 
-### Sequence: Search → Download → Index → Query
+### Sequence: Search, Download, Index, Query
 
-```
-MCP Client          MCP Server             External API        Filesystem
-    │                    │                       │                  │
-    │  search_arxiv()    │                       │                  │
-    │───────────────────>│   GET /api/query      │                  │
-    │                    │──────────────────────->│                  │
-    │                    │   Atom XML response    │                  │
-    │                    │<──────────────────────-│                  │
-    │   JSON results     │                       │                  │
-    │<───────────────────│                       │                  │
-    │                    │                       │                  │
-    │  download_paper()  │                       │                  │
-    │───────────────────>│   GET /pdf/{id}       │                  │
-    │                    │──────────────────────->│                  │
-    │                    │   PDF bytes (stream)   │                  │
-    │                    │<──────────────────────-│                  │
-    │                    │                       │   Write PDF      │
-    │                    │                       │─────────────────>│
-    │                    │                       │                  │
-    │                    │──── PyMuPDF extract ──────────────────-->│
-    │                    │<─── pages[] ────────────────────────────-│
-    │                    │                       │                  │
-    │                    │──── chunk_pages() ────>│                  │
-    │                    │──── SQLite upsert ────────────────────-->│
-    │   JSON (indexed)   │                       │                  │
-    │<───────────────────│                       │                  │
-    │                    │                       │                  │
-    │  query_papers()    │                       │                  │
-    │───────────────────>│                       │                  │
-    │                    │── FTS5 MATCH query ──────────────────-->│
-    │                    │<── BM25-ranked rows ────────────────────│
-    │   JSON results     │                       │                  │
-    │<───────────────────│                       │                  │
+```mermaid
+sequenceDiagram
+    participant C as MCP Client
+    participant S as MCP Server
+    participant A as External API
+    participant F as Filesystem
+
+    C->>S: search_arxiv()
+    S->>A: GET /api/query
+    A-->>S: Atom XML response
+    S-->>C: JSON results
+
+    C->>S: download_paper()
+    S->>A: GET /pdf/{id}
+    A-->>S: PDF bytes (stream)
+    S->>F: Write PDF
+    S->>F: PyMuPDF extract
+    F-->>S: pages[]
+    S->>S: chunk_pages()
+    S->>F: SQLite upsert
+    S-->>C: JSON (indexed)
+
+    C->>S: query_papers()
+    S->>F: FTS5 MATCH query
+    F-->>S: BM25-ranked rows
+    S-->>C: JSON results
 ```
 
 ### Sequence: Semantic Vector Search
 
-```
-MCP Client          MCP Server             fastembed            DuckDB
-    │                    │                       │                  │
-    │  embed_chunks()    │                       │                  │
-    │───────────────────>│                       │                  │
-    │                    │── fetch unembedded ──────────────────-->│
-    │                    │<── chunk texts ─────────────────────────│
-    │                    │   encode(texts)        │                  │
-    │                    │──────────────────────->│                  │
-    │                    │   float[][] vectors    │                  │
-    │                    │<──────────────────────-│                  │
-    │                    │── INSERT embeddings ─────────────────-->│
-    │   JSON (count)     │                       │                  │
-    │<───────────────────│                       │                  │
-    │                    │                       │                  │
-    │ semantic_search()  │                       │                  │
-    │───────────────────>│   encode(query)       │                  │
-    │                    │──────────────────────->│                  │
-    │                    │   query vector         │                  │
-    │                    │<──────────────────────-│                  │
-    │                    │── cosine similarity ─────────────────-->│
-    │                    │<── ranked chunks ───────────────────────│
-    │   JSON results     │                       │                  │
-    │<───────────────────│                       │                  │
+```mermaid
+sequenceDiagram
+    participant C as MCP Client
+    participant S as MCP Server
+    participant E as fastembed
+    participant D as DuckDB
+
+    C->>S: embed_chunks()
+    S->>D: fetch unembedded
+    D-->>S: chunk texts
+    S->>E: encode(texts)
+    E-->>S: float[][] vectors
+    S->>D: INSERT embeddings
+    S-->>C: JSON (count)
+
+    C->>S: semantic_search()
+    S->>E: encode(query)
+    E-->>S: query vector
+    S->>D: cosine similarity
+    D-->>S: ranked chunks
+    S-->>C: JSON results
 ```
 
 ---
@@ -427,6 +402,62 @@ You: Run some analytics on my indexed papers
 You: Find semantically similar passages to "access control policy evaluation"
   -> embed_chunks()
   -> semantic_search("access control policy evaluation")
+```
+
+## Troubleshooting
+
+### fastembed model download hangs or fails
+
+The first call to `embed_chunks` downloads the ONNX model (~100 MB). If this fails behind a proxy, download manually:
+
+```bash
+python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+```
+
+### CORE API returns 429 errors
+
+CORE's free tier allows ~10 requests/minute. The server enforces a 6.5-second delay between calls. If you still hit 429s, wait a few minutes or reduce `max_results`.
+
+### IAM docs search returns no results
+
+The IAM search uses a provider fallback chain: Vertex AI Search > Brave Search > SerpAPI > Google PSE. Check which providers you have configured:
+
+- **Easiest**: Set `BRAVE_SEARCH_API_KEY` (free tier available at [brave.com/search/api](https://brave.com/search/api/))
+- **Best coverage**: Set `GOOGLE_PSE_CX` + `GOOGLE_DEVKNOWLEDGE_API_KEY`
+- **Force a specific provider**: Set `IAM_DOCS_SEARCH_PROVIDER=brave`
+
+### GCP docs search fails with 403
+
+Ensure your `GOOGLE_DEVKNOWLEDGE_API_KEY` has the **Developer Knowledge API** enabled in your Google Cloud project. The key should be restricted to this API only.
+
+### DuckDB `analytics_sql` can't find papers
+
+The SQLite database is attached lazily on first use. If the DB file doesn't exist yet (no papers indexed), queries will fail. Index at least one paper first:
+
+```
+search_arxiv("attention mechanism")  -> download_paper("2301.12345")
+```
+
+### arXiv downloads fail with 403 or timeout
+
+arXiv enforces a 3-second rate limit. The server handles this automatically, but bulk downloads may still trigger blocks. Wait a few minutes and retry. For persistent issues, check if your IP is being rate-limited at [arxiv.org/help/robots](https://info.arxiv.org/help/api/tou.html).
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Install dev dependencies: `pip install -e ".[dev]"`
+4. Run tests: `make test`
+5. Run linter: `make lint`
+6. Submit a pull request
+
+### Development commands
+
+```bash
+make dev      # Install with dev deps
+make test     # pytest -v --tb=short
+make lint     # ruff check .
+make format   # ruff format .
 ```
 
 ## License
