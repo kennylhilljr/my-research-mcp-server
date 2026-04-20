@@ -567,6 +567,7 @@ def _index_downloaded_pdf(filepath, paper_meta, result, id_label):
         result["total_chunks"] = len(chunks)
     except Exception as e:
         result["index_error"] = str(e)
+        result["status"] = "downloaded_but_indexing_failed"
         logger.error(f"Indexing failed for {id_label}: {e}")
 
 
@@ -1048,6 +1049,7 @@ def get_semantic_scholar_paper(paper_id: str) -> str:
         "fields_of_study": paper.get("fieldsOfStudy") or [],
         "arxiv_id": ext_ids.get("ArXiv", ""),
         "doi": ext_ids.get("DOI", ""),
+        "corpus_id": ext_ids.get("CorpusId", ""),
         "url": paper.get("url", ""),
         "open_access_pdf": pdf_info.get("url", ""),
         "references": refs,
@@ -1699,7 +1701,22 @@ def download_paper_by_doi(
     doi = _clean_doi(doi)
 
     # Step 1: Get metadata from Crossref
-    metadata = {}
+    metadata = {
+        "doi": doi,
+        "title": "",
+        "authors": [],
+        "abstract": "",
+        "journal": "",
+        "publisher": "",
+        "type": "",
+        "published": "",
+        "url": "",
+        "citation_count": 0,
+        "references_count": 0,
+        "issn": [],
+        "subject": [],
+        "license": [],
+    }
     try:
         cr_resp = requests.get(
             f"{CROSSREF_API_BASE}/{doi}",
@@ -1707,7 +1724,7 @@ def download_paper_by_doi(
             timeout=30,
         )
         if cr_resp.status_code == 200:
-            metadata = _parse_crossref(cr_resp.json().get("message", {}))
+            metadata.update(_parse_crossref(cr_resp.json().get("message", {})))
     except Exception as e:
         logger.debug("Crossref metadata fetch skipped: %s", e)
 
@@ -1878,7 +1895,7 @@ def _parse_openalex_work(work: dict) -> dict:
     return {
         "openalex_id": work_id,
         "doi": (work.get("doi") or "").replace("https://doi.org/", ""),
-        "title": work.get("title") or work.get("display_name", ""),
+        "title": work.get("title") or work.get("display_name") or f"[Unknown Work {work_id}]",
         "authors": authors,
         "institutions": institutions,
         "year": work.get("publication_year"),
@@ -3310,7 +3327,9 @@ def _duckdb() -> "object":
                 f"ATTACH '{DEFAULT_DB_PATH}' AS papers_db (TYPE sqlite, READ_ONLY);"
             )
         except Exception as e:
-            logger.warning(f"DuckDB SQLite attach failed: {e}")
+            raise RuntimeError(
+                f"DuckDB failed to attach SQLite database at {DEFAULT_DB_PATH}: {e}"
+            ) from e
     return _duckdb_conn
 
 
@@ -3403,6 +3422,7 @@ def list_datasets() -> str:
             "exists": False,
             "hint": f"Create {root} and drop Parquet/CSV/JSON files into it.",
             "files": [],
+            "file_count": 0,
         }, indent=2)
     exts = {".parquet", ".csv", ".tsv", ".json", ".ndjson", ".jsonl"}
     files = []
@@ -3463,8 +3483,8 @@ def dataset_query(sql: str, limit: int = 100) -> str:
             candidate = (root / raw)
         try:
             resolved = candidate.resolve()
-        except Exception:
-            return json.dumps({"error": f"Cannot resolve path: {raw}"}, indent=2)
+        except Exception as e:
+            return json.dumps({"error": f"Cannot resolve path: {raw}", "exception_type": type(e).__name__}, indent=2)
         if root not in resolved.parents and resolved != root:
             return json.dumps({
                 "error": "Path outside DUCKDB_DATASETS_DIR is not allowed",
@@ -3485,7 +3505,7 @@ def dataset_query(sql: str, limit: int = 100) -> str:
         result["datasets_dir"] = str(root)
         return json.dumps(result, indent=2, default=str)
     except Exception as e:
-        return json.dumps({"error": f"dataset_query failed: {e}"}, indent=2)
+        return json.dumps({"error": f"dataset_query failed: {e}", "sql": sql[:200]}, indent=2)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3676,7 +3696,7 @@ def semantic_search(query: str, max_results: int = 10, arxiv_id: str = "") -> st
                 "chunk_id": d["chunk_id"],
                 "arxiv_id": d["arxiv_id"],
                 "heading": d.get("heading") or "",
-                "page_start": d.get("page_start"),
+                "page_start": d.get("page_start") or 0,
                 "score": round(float(d["score"]), 4),
                 "snippet": content,
             })
