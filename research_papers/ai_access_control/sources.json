@@ -1,0 +1,101 @@
+[
+  {
+    "title": "SAFE-GUARD: Semantic Access Control Framework Employing Generative User Assessment and Rule Decisions",
+    "url": "https://www.mdpi.com/2227-9709/13/1/1",
+    "doi": "10.3390/informatics13010001",
+    "priority": 1,
+    "tags": ["ai-access-control", "iam", "authz", "rag", "llm-security", "healthcare"]
+  },
+  {
+    "title": "RAGent: Retrieval-based Access Control Policy Generation",
+    "url": "https://arxiv.org/abs/2409.07489",
+    "doi": "10.48550/arXiv.2409.07489",
+    "arxiv_id": "2409.07489",
+    "priority": 1,
+    "tags": ["ai-access-control", "authz", "rag", "policy-generation"]
+  },
+  {
+    "title": "LMN: A Tool for Generating Machine Enforceable Policies from Natural Language Access Control Rules using LLMs",
+    "url": "https://arxiv.org/abs/2502.12460",
+    "doi": "10.48550/arXiv.2502.12460",
+    "arxiv_id": "2502.12460",
+    "priority": 1,
+    "tags": ["ai-access-control", "authz", "llm-security", "abac", "policy-generation"]
+  },
+  {
+    "title": "Intent-Based Access Control: Using LLMs to Intelligently Manage Access Control",
+    "url": "https://arxiv.org/abs/2402.07332",
+    "doi": "10.48550/arXiv.2402.07332",
+    "arxiv_id": "2402.07332",
+    "priority": 1,
+    "tags": ["ai-access-control", "iam", "authz", "llm-security", "rbac"]
+  },
+  {
+    "title": "Security Policy Generation and Verification Through Large Language Models: A Proposal",
+    "url": "https://doi.org/10.1145/3626232.3658635",
+    "doi": "10.1145/3626232.3658635",
+    "priority": 1,
+    "tags": ["ai-access-control", "authz", "llm-security", "policy-generation", "rego", "xacml"]
+  },
+  {
+    "title": "A Database-Independent LLM Framework for Real-Time Authorization in Retrieval-Augmented Generation",
+    "url": "https://openreview.net/forum?id=gdgGCQJd9X",
+    "priority": 1,
+    "tags": ["ai-access-control", "authz", "rag", "real-time-authorization"]
+  },
+  {
+    "title": "Permission-Aware RAG: IAM-Based Access Filtering in Multi-Resource Environments",
+    "url": "https://snu.elsevierpure.com/en/publications/permission-aware-rag-identity-and-access-management-iam-based-acc/",
+    "priority": 1,
+    "tags": ["ai-access-control", "iam", "authz", "rag", "permission-aware-rag"]
+  },
+  {
+    "title": "SoK: Authorization in Multi-Agent Retrieval-Augmented Generation Systems",
+    "url": "https://doi.org/10.5281/zenodo.18431323",
+    "doi": "10.5281/zenodo.18431323",
+    "priority": 1,
+    "tags": ["ai-access-control", "authz", "rag", "multi-agent", "llm-security"]
+  },
+  {
+    "title": "Risk and UCON-Based Access Control Model for Healthcare Big Data",
+    "url": "https://journalofbigdata.springeropen.com/articles/10.1186/s40537-023-00783-8",
+    "doi": "10.1186/s40537-023-00783-8",
+    "priority": 2,
+    "tags": ["access-control", "authz", "healthcare", "risk-based-access-control", "ucon"]
+  },
+  {
+    "title": "A Systematic Review of Access Control Models: Background, Existing Research, and Challenges",
+    "url": "https://doi.org/10.1109/ACCESS.2025.3533145",
+    "doi": "10.1109/ACCESS.2025.3533145",
+    "priority": 2,
+    "tags": ["access-control", "authz", "survey", "rbac", "abac"]
+  },
+  {
+    "title": "A Systematic Literature Review for Authorization and Access Control: Definitions, Strategies and Models",
+    "url": "https://doi.org/10.1108/IJWIS-04-2022-0077",
+    "doi": "10.1108/IJWIS-04-2022-0077",
+    "priority": 2,
+    "tags": ["access-control", "authz", "survey"]
+  },
+  {
+    "title": "A Comprehensive Survey on Requirements, Applications, and Future Challenges for Access Control Models in IoT",
+    "url": "https://www.mdpi.com/2624-831X/6/1/9",
+    "doi": "10.3390/iot6010009",
+    "priority": 2,
+    "tags": ["access-control", "authz", "iot", "survey"]
+  },
+  {
+    "title": "Behavior-Based Anomaly Detection in Log Data of Physical Access Control Systems",
+    "url": "https://doi.org/10.1109/TDSC.2022.3197265",
+    "doi": "10.1109/TDSC.2022.3197265",
+    "priority": 2,
+    "tags": ["access-control", "authz", "behavior-monitoring", "anomaly-detection"]
+  },
+  {
+    "title": "Automatic Generation of Attribute-Based Access Control Policies from Natural Language Documents",
+    "url": "https://doi.org/10.32604/cmc.2024.055167",
+    "doi": "10.32604/cmc.2024.055167",
+    "priority": 2,
+    "tags": ["ai-access-control", "authz", "abac", "policy-generation", "nlp"]
+  }
+]
