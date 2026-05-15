@@ -1,0 +1,46 @@
+{
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/server.py": {
+    "mtime": 1776659117.9906576,
+    "hash": "3db8cb700f32646e78989d64ee6b25da"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/tests/__init__.py": {
+    "mtime": 1770570023.0,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/tests/test_server.py": {
+    "mtime": 1776562230.774109,
+    "hash": "045bff4bac37bccf07df8aa667b3ebb7"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/research_papers/ai_access_control/ingest_sources.py": {
+    "mtime": 1777533702.3539581,
+    "hash": "333e5519c3a36d9ecf7fa701b661109f"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/CHANGELOG.md": {
+    "mtime": 1776437422.6621683,
+    "hash": "e88dfb3de28e43e74cf4be6c4bf8d2ab"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/PAPER_INDEX.md": {
+    "mtime": 1775678033.4235823,
+    "hash": "50fd5476a9d986c9351185952c8e2ffc"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/CONTRIBUTING.md": {
+    "mtime": 1776562046.456705,
+    "hash": "0490e242f0fd0d6c342c72cc402bcaf0"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/CLAUDE.md": {
+    "mtime": 1776437318.8383021,
+    "hash": "cf7842e729f952fcb41da77ba2296470"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/research_papers/AI_IAM_NEGATIVE_IMPACT_CASES.md": {
+    "mtime": 1777530156.8798122,
+    "hash": "e22416afe0fc81816adcf771486f35a1"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/README.md": {
+    "mtime": 1776562192.604615,
+    "hash": "91099cfa96b639272c66c9b1081ae39d"
+  },
+  "/Users/bkh223/Documents/GitHub/my-research-mcp-server/research_papers/ai_access_control/README.md": {
+    "mtime": 1777533678.9155269,
+    "hash": "b6d46045aa8b0066bcee9b2a13e11bb6"
+  }
+}
