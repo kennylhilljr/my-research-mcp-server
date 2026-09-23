@@ -2706,20 +2706,53 @@ def _search_iam_docs_vertex(query: str, max_results: int) -> dict:
     return resp.json()
 
 
-def _iam_docs_sites_query(query: str) -> str:
-    sites = " OR ".join(f"site:{d}" for d in IAM_DOCS_DOMAINS)
+# Brave rejects a `q` longer than 400 characters with HTTP 422 (too_long).
+# The full IAM_DOCS_DOMAINS site: chain is roughly 640 characters, so the
+# site list has to be split into batches that each fit inside the cap.
+BRAVE_MAX_QUERY_CHARS = 380
+BRAVE_MAX_BATCHES = 3
+
+
+def _rank_iam_domains(query: str) -> list[str]:
+    """Order the corpus so domains the query names explicitly come first."""
+    terms = {t for t in re.split(r"[^a-z0-9]+", query.lower()) if len(t) > 2}
+    if not terms:
+        return list(IAM_DOCS_DOMAINS)
+
+    def score(domain: str) -> int:
+        stem = domain.split(".")[0].lower()
+        if stem in terms:
+            return 2
+        return 1 if any(t in stem or stem in t for t in terms) else 0
+
+    return sorted(IAM_DOCS_DOMAINS, key=lambda d: -score(d))
+
+
+def _iam_docs_sites_query(query: str, domains: Optional[list[str]] = None) -> str:
+    sites = " OR ".join(f"site:{d}" for d in (domains or IAM_DOCS_DOMAINS))
     return f"({query}) ({sites})"
 
 
-def _search_iam_docs_brave(query: str, max_results: int) -> dict:
-    if not BRAVE_SEARCH_API_KEY:
-        raise ValueError("BRAVE_SEARCH_API_KEY not set")
+def _iam_domain_batches(query: str, max_chars: int) -> list[list[str]]:
+    """Split the ranked corpus into site: batches that each fit under max_chars."""
+    batches: list[list[str]] = []
+    current: list[str] = []
+    for domain in _rank_iam_domains(query):
+        candidate = current + [domain]
+        if current and len(_iam_docs_sites_query(query, candidate)) > max_chars:
+            batches.append(current)
+            current = [domain]
+        else:
+            current = candidate
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _brave_web_search(q: str, count: int) -> dict:
     resp = requests.get(
         "https://api.search.brave.com/res/v1/web/search",
-        params={
-            "q": _iam_docs_sites_query(query),
-            "count": max_results,
-        },
+        params={"q": q, "count": count},
         headers={
             "Accept": "application/json",
             "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
@@ -2728,6 +2761,43 @@ def _search_iam_docs_brave(query: str, max_results: int) -> dict:
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def _search_iam_docs_brave(query: str, max_results: int) -> dict:
+    """Query Brave across the corpus, fanning out so no request exceeds the cap.
+
+    Brave caps `q` at 400 characters, which the full site: chain blows past.
+    The corpus is relevance-ranked against the query, split into batches that
+    fit, and the merged results are de-duplicated by URL.
+    """
+    if not BRAVE_SEARCH_API_KEY:
+        raise ValueError("BRAVE_SEARCH_API_KEY not set")
+
+    batches = _iam_domain_batches(query, BRAVE_MAX_QUERY_CHARS)[:BRAVE_MAX_BATCHES]
+    merged: list[dict] = []
+    seen: set[str] = set()
+    first_error: Exception | None = None
+
+    for i, batch in enumerate(batches):
+        if i:
+            time.sleep(1.1)  # Brave's free tier allows one request per second.
+        try:
+            data = _brave_web_search(_iam_docs_sites_query(query, batch), max_results)
+        except Exception as e:  # noqa: BLE001 - one bad batch must not sink the rest
+            if first_error is None:
+                first_error = e
+            continue
+        for result in data.get("web", {}).get("results", []):
+            url = result.get("url", "")
+            if url and url not in seen:
+                seen.add(url)
+                merged.append(result)
+        if len(merged) >= max_results:
+            break
+
+    if not merged and first_error is not None:
+        raise first_error
+    return {"web": {"results": merged[:max_results]}}
 
 
 def _search_iam_docs_serpapi(query: str, max_results: int) -> dict:
