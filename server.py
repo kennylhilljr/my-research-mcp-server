@@ -1134,179 +1134,17 @@ def get_semantic_scholar_paper(paper_id: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DSPACE@MIT TOOLS
-# ═══════════════════════════════════════════════════════════════════════════
-
-DSPACE_MIT_BASE = "https://dspace.mit.edu/rest"
-
-
-def _dspace_parse_item(item: dict) -> dict:
-    """Parse a DSpace item with metadata into a clean dict."""
-    metadata = item.get("metadata", [])
-    authors = []
-    meta_dict = {}
-    for m in metadata:
-        key = m.get("key", "")
-        value = m.get("value", "")
-        if key == "dc.contributor.author":
-            authors.append(value)
-        elif key not in meta_dict:
-            meta_dict[key] = value
-
-    return {
-        "uuid": item.get("uuid", ""),
-        "title": meta_dict.get("dc.title", item.get("name", "")),
-        "authors": authors,
-        "abstract": meta_dict.get("dc.description.abstract", ""),
-        "date_issued": meta_dict.get("dc.date.issued", ""),
-        "type": meta_dict.get("dc.type", ""),
-        "department": meta_dict.get("dc.contributor.department", ""),
-        "handle_url": f"https://hdl.handle.net/{item.get('handle', '')}",
-        "publisher": meta_dict.get("dc.publisher", ""),
-        "journal": meta_dict.get("dc.relation.journal", ""),
-        "doi": meta_dict.get("dc.relation.isversionof", ""),
-    }
-
-
-def _dspace_search_field(field: str, query: str, limit: int) -> list:
-    """Search a single DSpace metadata field."""
-    resp = requests.get(
-        f"{DSPACE_MIT_BASE}/filtered-items",
-        params={
-            "query_field[]": field,
-            "query_op[]": "contains",
-            "query_val[]": query,
-            "limit": limit,
-            "expand": "metadata",
-        },
-        headers={"Accept": "application/json"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json().get("items", [])
-
-
-@mcp.tool()
-def search_mit_dspace(
-    query: str,
-    max_results: int = 10,
-    search_field: str = "all",
-) -> str:
-    """
-    Search MIT's DSpace institutional repository for technical reports,
-    theses, white papers, and peer-reviewed articles by MIT researchers.
-
-    This searches MIT's collection of 60,000+ works across all departments.
-
-    Args:
-        query: Search term to find in item metadata.
-        max_results: 1-100 results to return (default 10).
-        search_field: Where to search. Options:
-                      "all" (default) — searches title and abstract, merges results.
-                      "title" — dc.title only.
-                      "abstract" — dc.description.abstract only.
-                      "author" — dc.contributor.author only.
-                      "subject" — dc.subject only.
-
-    Returns:
-        JSON with matching items including title, authors, abstract,
-        department, date, handle URL, and document type.
-    """
-    max_results = _clamp(max_results, 1, 100)
-
-    logger.info(f"DSpace@MIT search: {query} (field={search_field})")
-
-    if search_field == "all":
-        # Search title and abstract separately, merge and deduplicate
-        title_items = _dspace_search_field("dc.title", query, max_results)
-        abstract_items = _dspace_search_field("dc.description.abstract", query, max_results)
-
-        seen_uuids = set()
-        merged = []
-        for item in title_items + abstract_items:
-            uuid = item.get("uuid", "")
-            if uuid not in seen_uuids:
-                seen_uuids.add(uuid)
-                merged.append(item)
-        items = merged[:max_results]
-    else:
-        field_map = {
-            "title": "dc.title",
-            "abstract": "dc.description.abstract",
-            "author": "dc.contributor.author",
-            "subject": "dc.subject",
-        }
-        dc_field = field_map.get(search_field, "dc.title")
-        items = _dspace_search_field(dc_field, query, max_results)
-
-    entries = [_dspace_parse_item(item) for item in items]
-
-    return json.dumps({
-        "total_results": len(entries),
-        "query": query,
-        "search_field": search_field,
-        "entries": entries,
-    }, indent=2)
-
-
-@mcp.tool()
-def get_mit_dspace_item(uuid: str) -> str:
-    """
-    Get full metadata for a specific item in MIT's DSpace repository.
-
-    Args:
-        uuid: The UUID of the item (from search results).
-    """
-    resp = requests.get(
-        f"{DSPACE_MIT_BASE}/items/{uuid}",
-        params={"expand": "metadata,bitstreams"},
-        headers={"Accept": "application/json"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    item = resp.json()
-
-    metadata = item.get("metadata", [])
-    meta_dict = {}
-    authors = []
-    for m in metadata:
-        key = m.get("key", "")
-        value = m.get("value", "")
-        if key == "dc.contributor.author":
-            authors.append(value)
-        elif key not in meta_dict:
-            meta_dict[key] = value
-
-    bitstreams = []
-    for b in item.get("bitstreams", []):
-        bitstreams.append({
-            "name": b.get("name", ""),
-            "size_bytes": b.get("sizeBytes", 0),
-            "mime_type": b.get("mimeType", ""),
-            "retrieve_link": f"https://dspace.mit.edu{b.get('retrieveLink', '')}",
-        })
-
-    return json.dumps({
-        "uuid": item.get("uuid", ""),
-        "title": meta_dict.get("dc.title", item.get("name", "")),
-        "authors": authors,
-        "abstract": meta_dict.get("dc.description.abstract", ""),
-        "date_issued": meta_dict.get("dc.date.issued", ""),
-        "type": meta_dict.get("dc.type", ""),
-        "department": meta_dict.get("dc.contributor.department", ""),
-        "handle_url": f"https://hdl.handle.net/{item.get('handle', '')}",
-        "publisher": meta_dict.get("dc.publisher", ""),
-        "journal": meta_dict.get("dc.relation.journal", ""),
-        "doi": meta_dict.get("dc.relation.isversionof", ""),
-        "bitstreams": bitstreams,
-    }, indent=2)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# DSPACE 8 GENERIC HELPERS (Harvard, Cornell, Penn)
+# DSPACE 8 GENERIC HELPERS (MIT, Harvard, Cornell, Penn)
 # ═══════════════════════════════════════════════════════════════════════════
 
 DSPACE8_REPOS = {
+    "mit": {
+        "name": "DSpace@MIT",
+        "api_base": "https://dspace.mit.edu/server/api",
+        "web_base": "https://dspace.mit.edu",
+        "description": "150,000+ works: theses, articles, technical reports, "
+                       "working papers by MIT researchers",
+    },
     "harvard": {
         "name": "Harvard DASH",
         "api_base": "https://dash.harvard.edu/server/api",
@@ -1326,6 +1164,111 @@ DSPACE8_REPOS = {
         "description": "43,000+ works: articles, theses, datasets by UPenn researchers",
     },
 }
+
+# item_type presets -> dc.type terms. Matching is done with a Solr clause on
+# the tokenized dc.type field inside the discovery "query" parameter, e.g.
+#   (narcissism) AND dc.type:(article OR thesis OR "working paper")
+# Why not f.itemtype=<value>,equals: Harvard DASH has no "itemtype" discovery
+# filter (returns HTTP 400), and repeated f.itemtype values are ANDed, so an
+# "articles OR theses" filter cannot be expressed that way. dc.type tokens
+# also match each repository's vocabulary ("Journal Article", "Thesis or
+# Dissertation", "Dissertation/Thesis", ...). Items whose dc.type is "Other"
+# (and Person/profile entities, which have no dc.type) are excluded by every
+# preset except "any".
+DSPACE8_ITEM_TYPES = {
+    "scholarly": [
+        "article", "thesis", "dissertation", "working paper", "report",
+        "preprint", "book chapter", "book", "conference paper", "proceedings",
+    ],
+    "article": ["article"],
+    "thesis": ["thesis", "dissertation"],
+    "report": ["report", "working paper"],
+    "book": ["book", "book chapter"],
+    "dataset": ["dataset"],
+    "any": None,
+}
+
+# search_field -> Solr field used to scope the discovery query.
+DSPACE8_SEARCH_FIELDS = {
+    "all": None,
+    "title": "dc.title",
+    "abstract": "dc.description.abstract",
+    "author": "dc.contributor.author",
+    "subject": "dc.subject",
+}
+
+_DSPACE8_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _dspace8_type_clause(item_type: str) -> str:
+    """Map an item_type value to a Solr dc.type clause ("" = no filter).
+
+    Presets come from DSPACE8_ITEM_TYPES. Any other non-empty value is treated
+    as a literal dc.type phrase (e.g. "Technical Report").
+    """
+    key = (item_type or "any").strip()
+    if key.lower() in DSPACE8_ITEM_TYPES:
+        terms = DSPACE8_ITEM_TYPES[key.lower()]
+    else:
+        terms = [key]
+    if not terms:
+        return ""
+    parts = []
+    for term in terms:
+        term = term.replace("\\", " ").replace('"', " ").strip()
+        if term:
+            parts.append(f'"{term}"' if " " in term else term)
+    if not parts:
+        return ""
+    return "dc.type:(" + " OR ".join(parts) + ")"
+
+
+def _dspace8_build_query(query: str, search_field: str = "all",
+                         item_type: str = "scholarly") -> str:
+    """Build the discovery "query" string for a DSpace 8 search.
+
+    Raises ValueError for an unknown search_field.
+    """
+    field_key = (search_field or "all").strip().lower()
+    if field_key not in DSPACE8_SEARCH_FIELDS:
+        raise ValueError(
+            "search_field must be one of: " + ", ".join(DSPACE8_SEARCH_FIELDS)
+        )
+    query = (query or "").strip()
+    solr_field = DSPACE8_SEARCH_FIELDS[field_key]
+    if query and solr_field:
+        base = f"{solr_field}:({query})"
+    else:
+        base = query
+    type_clause = _dspace8_type_clause(item_type)
+    if base and type_clause:
+        return f"({base}) AND {type_clause}"
+    return base or type_clause
+
+
+def _dspace8_http_error(repo: dict, exc: Exception, **context) -> dict:
+    """Build the standard JSON error dict for a failed DSpace 8 request."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is not None:
+        message = f"{repo['name']} request failed: HTTP {status}"
+    else:
+        message = f"{repo['name']} request failed: {exc}"
+    err = {"error": message, "status_code": status, "source": repo["name"]}
+    err.update(context)
+    if status in (401, 403):
+        err["hint"] = ("Item is private, withdrawn, or the identifier is not a "
+                       "valid item UUID in this repository.")
+    elif status == 404:
+        err["hint"] = "No item with this UUID exists in this repository."
+    elif status == 429:
+        retry_after = (getattr(response, "headers", None) or {}).get("Retry-After")
+        err["hint"] = "Rate limited by the repository; retry later."
+        if retry_after:
+            err["retry_after"] = retry_after
+    return err
 
 
 def _dspace8_parse_item(item: dict, web_base: str) -> dict:
@@ -1358,20 +1301,38 @@ def _dspace8_parse_item(item: dict, web_base: str) -> dict:
     }
 
 
-def _dspace8_search(repo_key: str, query: str, max_results: int) -> dict:
-    """Search a DSpace 8 repository."""
+def _dspace8_search(repo_key: str, query: str, max_results: int,
+                    item_type: str = "scholarly",
+                    search_field: str = "all") -> dict:
+    """Search a DSpace 8 repository via /discover/search/objects.
+
+    Returns the result dict, or a dict with an "error" key on bad input or a
+    failed HTTP request.
+    """
     repo = DSPACE8_REPOS[repo_key]
     api_base = repo["api_base"]
 
-    logger.info(f"{repo['name']} search: {query}")
-    resp = requests.get(
-        f"{api_base}/discover/search/objects",
-        params={"query": query, "dsoType": "ITEM", "size": max_results},
-        headers={"Accept": "application/json"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        solr_query = _dspace8_build_query(query, search_field, item_type)
+    except ValueError as e:
+        return {"error": str(e), "source": repo["name"], "query": query}
+
+    params = {"dsoType": "ITEM", "size": max_results}
+    if solr_query:
+        params["query"] = solr_query
+
+    logger.info(f"{repo['name']} search: {solr_query!r}")
+    try:
+        resp = requests.get(
+            f"{api_base}/discover/search/objects",
+            params=params,
+            headers={"Accept": "application/json"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        return _dspace8_http_error(repo, e, query=query)
 
     sr = data.get("_embedded", {}).get("searchResult", {})
     page = sr.get("page", {})
@@ -1387,22 +1348,40 @@ def _dspace8_search(repo_key: str, query: str, max_results: int) -> dict:
         "results_count": len(entries),
         "source": repo["name"],
         "query": query,
+        "search_field": search_field,
+        "item_type": item_type,
         "entries": entries,
     }
 
 
 def _dspace8_get_item(repo_key: str, uuid: str) -> dict:
-    """Get full metadata + bitstreams for a DSpace 8 item."""
+    """Get full metadata + bitstreams for a DSpace 8 item.
+
+    Returns a dict with "error", "status_code" and "uuid" keys when the UUID is
+    malformed or the item request fails (e.g. 401 private / 404 missing).
+    """
     repo = DSPACE8_REPOS[repo_key]
     api_base = repo["api_base"]
 
-    resp = requests.get(
-        f"{api_base}/core/items/{uuid}",
-        headers={"Accept": "application/json"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    item = resp.json()
+    uuid = (uuid or "").strip()
+    if not _DSPACE8_UUID_RE.match(uuid):
+        return {
+            "error": f"Invalid item UUID for {repo['name']}: {uuid!r}",
+            "status_code": None,
+            "source": repo["name"],
+            "uuid": uuid,
+        }
+
+    try:
+        resp = requests.get(
+            f"{api_base}/core/items/{uuid}",
+            headers={"Accept": "application/json"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        item = resp.json()
+    except requests.RequestException as e:
+        return _dspace8_http_error(repo, e, uuid=uuid)
 
     bitstreams = []
     try:
@@ -1438,10 +1417,70 @@ def _dspace8_get_item(repo_key: str, uuid: str) -> dict:
     return result
 
 
+# ── DSpace@MIT ──────────────────────────────────────────────────────────
+
+@mcp.tool()
+def search_mit_dspace(
+    query: str,
+    max_results: int = 10,
+    search_field: str = "all",
+    item_type: str = "scholarly",
+) -> str:
+    """
+    Search MIT's DSpace institutional repository for technical reports,
+    theses, white papers, and peer-reviewed articles by MIT researchers.
+    150,000+ works across all departments (DSpace 8 discovery API).
+
+    Args:
+        query: Search terms (Solr/Lucene syntax such as AND, OR, quotes is passed through).
+        max_results: 1-100 results to return (default 10).
+        search_field: Where to search. Options:
+                      "all" (default) — all indexed metadata and full text.
+                      "title" — dc.title only.
+                      "abstract" — dc.description.abstract only.
+                      "author" — dc.contributor.author only.
+                      "subject" — dc.subject only.
+        item_type: Filter on the item's dc.type (default "scholarly").
+                   "scholarly" — articles, theses, working papers, reports,
+                   preprints, books, book chapters, conference papers;
+                   excludes "Other" items. "article", "thesis", "report",
+                   "book", "dataset" — that type only. "any" — no filter.
+                   Any other value is matched as a literal dc.type phrase.
+
+    Returns:
+        JSON with matching items including uuid, title, authors, abstract,
+        department, date, handle URL, and document type. On failure, JSON
+        with "error" and "status_code".
+    """
+    max_results = _clamp(max_results, 1, 100)
+    return json.dumps(
+        _dspace8_search("mit", query, max_results, item_type=item_type,
+                        search_field=search_field),
+        indent=2,
+    )
+
+
+@mcp.tool()
+def get_mit_dspace_item(uuid: str) -> str:
+    """
+    Get full metadata and downloadable files for an item in MIT's DSpace
+    repository.
+
+    Args:
+        uuid: The UUID of the item (from search_mit_dspace results).
+
+    Returns:
+        JSON with metadata and bitstreams (file name, size, MIME type,
+        download link). On failure, JSON with "error", "status_code", "uuid".
+    """
+    return json.dumps(_dspace8_get_item("mit", uuid), indent=2)
+
+
 # ── Harvard DASH ────────────────────────────────────────────────────────
 
 @mcp.tool()
-def search_harvard_dash(query: str, max_results: int = 10) -> str:
+def search_harvard_dash(query: str, max_results: int = 10,
+                        item_type: str = "scholarly") -> str:
     """
     Search Harvard's DASH open-access repository for scholarly works.
     58,000+ works: articles, working papers, theses, case studies.
@@ -1449,9 +1488,19 @@ def search_harvard_dash(query: str, max_results: int = 10) -> str:
     Args:
         query: Search terms (matched against title, abstract, metadata).
         max_results: 1-100 results to return (default 10).
+        item_type: Filter on the item's dc.type (default "scholarly").
+                   "scholarly" — articles, theses, working papers, reports,
+                   preprints, books, book chapters, conference papers;
+                   excludes "Other" items (e.g. film-archive calendars) and
+                   person profiles. "article", "thesis", "report", "book",
+                   "dataset" — that type only. "any" — no filter.
+                   Any other value is matched as a literal dc.type phrase.
     """
     max_results = _clamp(max_results, 1, 100)
-    return json.dumps(_dspace8_search("harvard", query, max_results), indent=2)
+    return json.dumps(
+        _dspace8_search("harvard", query, max_results, item_type=item_type),
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -1468,7 +1517,8 @@ def get_harvard_dash_item(uuid: str) -> str:
 # ── Cornell eCommons ────────────────────────────────────────────────────
 
 @mcp.tool()
-def search_cornell_ecommons(query: str, max_results: int = 10) -> str:
+def search_cornell_ecommons(query: str, max_results: int = 10,
+                            item_type: str = "scholarly") -> str:
     """
     Search Cornell's eCommons repository for scholarly works.
     24,000+ works: strong in CS, engineering, and policy research.
@@ -1477,9 +1527,18 @@ def search_cornell_ecommons(query: str, max_results: int = 10) -> str:
     Args:
         query: Search terms (matched against title, abstract, metadata).
         max_results: 1-100 results to return (default 10).
+        item_type: Filter on the item's dc.type (default "scholarly").
+                   "scholarly" — articles, theses, working papers, reports,
+                   preprints, books, book chapters, conference papers;
+                   excludes "Other" items. "article", "thesis", "report",
+                   "book", "dataset" — that type only. "any" — no filter.
+                   Any other value is matched as a literal dc.type phrase.
     """
     max_results = _clamp(max_results, 1, 100)
-    return json.dumps(_dspace8_search("cornell", query, max_results), indent=2)
+    return json.dumps(
+        _dspace8_search("cornell", query, max_results, item_type=item_type),
+        indent=2,
+    )
 
 
 @mcp.tool()
@@ -1496,7 +1555,8 @@ def get_cornell_ecommons_item(uuid: str) -> str:
 # ── Penn ScholarlyCommons ──────────────────────────────────────────────
 
 @mcp.tool()
-def search_penn_scholarly(query: str, max_results: int = 10) -> str:
+def search_penn_scholarly(query: str, max_results: int = 10,
+                          item_type: str = "scholarly") -> str:
     """
     Search UPenn's ScholarlyCommons repository for scholarly works.
     43,000+ works: articles, theses, datasets, conference papers.
@@ -1505,9 +1565,18 @@ def search_penn_scholarly(query: str, max_results: int = 10) -> str:
     Args:
         query: Search terms (matched against title, abstract, metadata).
         max_results: 1-100 results to return (default 10).
+        item_type: Filter on the item's dc.type (default "scholarly").
+                   "scholarly" — articles, theses, working papers, reports,
+                   preprints, books, book chapters, conference papers;
+                   excludes "Other" items. "article", "thesis", "report",
+                   "book", "dataset" — that type only. "any" — no filter.
+                   Any other value is matched as a literal dc.type phrase.
     """
     max_results = _clamp(max_results, 1, 100)
-    return json.dumps(_dspace8_search("penn", query, max_results), indent=2)
+    return json.dumps(
+        _dspace8_search("penn", query, max_results, item_type=item_type),
+        indent=2,
+    )
 
 
 @mcp.tool()

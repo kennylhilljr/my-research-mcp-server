@@ -15,7 +15,6 @@ from server import (
     PaperIndex,
     _clamp,
     _dspace8_parse_item,
-    _dspace_parse_item,
     _ensure_read_only_sql,
     _extract_links,
     _extract_main_text,
@@ -1079,51 +1078,6 @@ class TestParseCoreWork:
         work = {"language": None}
         result = _parse_core_work(work)
         assert result["language"] == ""
-
-
-# ── _dspace_parse_item() ────────────────────────────────────────────────
-
-class TestDspaceParseItem:
-    def test_full_item(self):
-        item = {
-            "uuid": "abc-123",
-            "name": "MIT Paper",
-            "handle": "1721.1/12345",
-            "metadata": [
-                {"key": "dc.title", "value": "MIT Paper Title"},
-                {"key": "dc.contributor.author", "value": "Alice Smith"},
-                {"key": "dc.contributor.author", "value": "Bob Jones"},
-                {"key": "dc.description.abstract", "value": "Abstract text"},
-                {"key": "dc.date.issued", "value": "2023-06"},
-                {"key": "dc.type", "value": "Thesis"},
-                {"key": "dc.contributor.department", "value": "CSAIL"},
-                {"key": "dc.publisher", "value": "MIT"},
-                {"key": "dc.relation.journal", "value": "Nature"},
-                {"key": "dc.relation.isversionof", "value": "10.1234/test"},
-            ],
-        }
-        result = _dspace_parse_item(item)
-        assert result["uuid"] == "abc-123"
-        assert result["title"] == "MIT Paper Title"
-        assert result["authors"] == ["Alice Smith", "Bob Jones"]
-        assert result["abstract"] == "Abstract text"
-        assert result["date_issued"] == "2023-06"
-        assert result["type"] == "Thesis"
-        assert result["department"] == "CSAIL"
-        assert result["handle_url"] == "https://hdl.handle.net/1721.1/12345"
-        assert result["doi"] == "10.1234/test"
-
-    def test_empty_item(self):
-        result = _dspace_parse_item({})
-        assert result["uuid"] == ""
-        assert result["title"] == ""
-        assert result["authors"] == []
-        assert result["abstract"] == ""
-
-    def test_fallback_to_name(self):
-        item = {"name": "Fallback Name", "metadata": []}
-        result = _dspace_parse_item(item)
-        assert result["title"] == "Fallback Name"
 
 
 # ── _dspace8_parse_item() ───────────────────────────────────────────────
