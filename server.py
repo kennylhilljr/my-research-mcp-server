@@ -2158,13 +2158,46 @@ def _parse_share_card(meta: dict) -> dict:
     }
 
 
+OSF_MIN_YEAR = 1900
+
+
+def _share_year_filter(year_from: int = None, year_to: int = None) -> tuple:
+    """Validate a year range and build SHARE dateCreated filter params.
+
+    SHARE's [after]/[before] operators take a year and are exclusive of that
+    whole year, so an inclusive year_from..year_to range maps to
+    [after]=year_from-1 and [before]=year_to+1.
+
+    Returns (params, error); error is None when the range is valid.
+    """
+    max_year = datetime.now(timezone.utc).year + 1
+    for name, year in (("year_from", year_from), ("year_to", year_to)):
+        if year is None:
+            continue
+        if isinstance(year, bool) or not isinstance(year, int):
+            return {}, f"{name} must be an integer year"
+        if not OSF_MIN_YEAR <= year <= max_year:
+            return {}, f"{name} must be between {OSF_MIN_YEAR} and {max_year}"
+    if year_from is not None and year_to is not None and year_from > year_to:
+        return {}, "year_from must be less than or equal to year_to"
+
+    params = {}
+    if year_from is not None:
+        params["cardSearchFilter[dateCreated][after]"] = str(year_from - 1)
+    if year_to is not None:
+        params["cardSearchFilter[dateCreated][before]"] = str(year_to + 1)
+    return params, None
+
+
 def _share_search(query: str, max_results: int, sort: str, resource_type: str,
-                  publisher: str = None) -> dict:
+                  publisher: str = None, date_filter: dict = None) -> dict:
     """Run a SHARE index-card search and return parsed entries in ranked order."""
     params = {"cardSearchText": query, "page[size]": _clamp(max_results, 1, 100)}
     params["cardSearchFilter[resourceType]"] = OSF_RESOURCE_TYPES[resource_type]
     if publisher:
         params["cardSearchFilter[publisher]"] = publisher
+    if date_filter:
+        params.update(date_filter)
     if OSF_SORTS[sort]:
         params["sort"] = OSF_SORTS[sort]
 
@@ -2203,6 +2236,8 @@ def search_osf(
     provider: str = None,
     max_results: int = 10,
     sort: str = "relevance",
+    year_from: int = None,
+    year_to: int = None,
 ) -> str:
     """
     Search OSF: preprints from every OSF preprint server, study registrations
@@ -2217,6 +2252,10 @@ def search_osf(
                   (e.g. "psyarxiv", "socarxiv").
         max_results: 1-100 results to return (default 10).
         sort: "relevance" (default) or "newest".
+        year_from: Optional earliest year the record was created on OSF
+                   (inclusive, e.g. 2020).
+        year_to: Optional latest year the record was created on OSF
+                 (inclusive, e.g. 2025).
 
     Returns:
         JSON with total results and entries including resource type, title,
@@ -2229,15 +2268,24 @@ def search_osf(
         }, indent=2)
     if sort not in OSF_SORTS:
         return json.dumps({"error": f"sort must be one of: {', '.join(OSF_SORTS)}"}, indent=2)
+    date_filter, error = _share_year_filter(year_from, year_to)
+    if error:
+        return json.dumps({"error": error}, indent=2)
 
     publisher = f"https://osf.io/preprints/{provider.strip().lower()}" if provider else None
     logger.info(f"OSF search ({resource_type}, {provider or 'all'}): {query}")
-    result = _share_search(query, max_results, sort, resource_type, publisher)
+    result = _share_search(query, max_results, sort, resource_type, publisher, date_filter)
     return json.dumps({"query": query, "source": "OSF (via SHARE)", **result}, indent=2)
 
 
 @mcp.tool()
-def search_psyarxiv(query: str, max_results: int = 10, sort: str = "relevance") -> str:
+def search_psyarxiv(
+    query: str,
+    max_results: int = 10,
+    sort: str = "relevance",
+    year_from: int = None,
+    year_to: int = None,
+) -> str:
     """
     Search PsyArXiv, the main preprint server for psychology and behavioral
     science. Matches titles, abstracts, and keywords through the SHARE index.
@@ -2247,6 +2295,9 @@ def search_psyarxiv(query: str, max_results: int = 10, sort: str = "relevance") 
         query: Search terms (e.g. "gaslighting intimate relationships").
         max_results: 1-100 results to return (default 10).
         sort: "relevance" (default) or "newest".
+        year_from: Optional earliest year the preprint was posted (inclusive,
+                   e.g. 2024).
+        year_to: Optional latest year the preprint was posted (inclusive).
 
     Returns:
         JSON with total results and entries including title, authors, date,
@@ -2254,9 +2305,14 @@ def search_psyarxiv(query: str, max_results: int = 10, sort: str = "relevance") 
     """
     if sort not in OSF_SORTS:
         return json.dumps({"error": f"sort must be one of: {', '.join(OSF_SORTS)}"}, indent=2)
+    date_filter, error = _share_year_filter(year_from, year_to)
+    if error:
+        return json.dumps({"error": error}, indent=2)
 
     logger.info(f"PsyArXiv search: {query}")
-    result = _share_search(query, max_results, sort, "preprint", PSYARXIV_PUBLISHER)
+    result = _share_search(
+        query, max_results, sort, "preprint", PSYARXIV_PUBLISHER, date_filter
+    )
     return json.dumps({"query": query, "source": "PsyArXiv (via SHARE)", **result}, indent=2)
 
 
