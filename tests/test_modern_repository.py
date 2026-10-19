@@ -197,6 +197,46 @@ def test_migration_from_legacy_preserves_tables_and_reconciles(tmp_path):
     repo.close()
 
 
+def test_migration_parses_naive_legacy_timestamps_as_utc(tmp_path):
+    path = tmp_path / "legacy-naive.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """CREATE TABLE papers (
+            arxiv_id TEXT PRIMARY KEY, title TEXT, authors TEXT, abstract TEXT,
+            categories TEXT, published TEXT, pdf_path TEXT, total_pages INTEGER,
+            indexed_at TEXT, content_hash TEXT
+        )"""
+    )
+    rows = [
+        # Naive date-only published, naive datetime indexed_at (legacy server format).
+        ("2401.00001", "Naive", "[]", None, "[]", "2024-01-01", None, 1,
+         "2025-06-07T08:09:10.123456", None),
+        # "Z" suffix and an unparseable published value.
+        ("2401.00002", "Zulu", "[]", None, "[]", "January 2024", None, 1,
+         "2025-06-07T08:09:10Z", None),
+    ]
+    conn.executemany("INSERT INTO papers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+
+    repo = SQLiteRepository(path)
+    report = repo.initialize()
+    assert report.migrated_works == 2
+
+    naive = repo.get_work("legacy:arxiv:2401.00001")
+    assert naive.published_at == datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert naive.created_at == datetime(2025, 6, 7, 8, 9, 10, 123456, tzinfo=timezone.utc)
+    assert naive.updated_at == naive.created_at
+    assert repo.get_document("legacy:arxiv:2401.00001").created_at.tzinfo is not None
+
+    zulu = repo.get_work("legacy:arxiv:2401.00002")
+    assert zulu.created_at == datetime(2025, 6, 7, 8, 9, 10, tzinfo=timezone.utc)
+    assert zulu.published_at is None
+    assert zulu.extensions["legacy_published"] == "January 2024"
+    assert len(repo.list_works()) == 2
+    repo.close()
+
+
 def test_failed_migration_rolls_back_schema_and_data(tmp_path, monkeypatch):
     path = tmp_path / "broken.db"
     repo = SQLiteRepository(path)
