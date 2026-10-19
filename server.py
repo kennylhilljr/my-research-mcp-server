@@ -214,9 +214,31 @@ class PaperIndex:
 
     # ── Querying ─────────────────────────────────────────────────────────
 
+    # FTS5 column index of `content` in chunks_fts (content, heading, arxiv_id).
+    FTS_CONTENT_COLUMN = 0
+
     def search(self, query: str, limit: int = 20, arxiv_ids: list = None) -> list:
         """Full-text search across all indexed paper content."""
         fts_query = self.to_fts_query(query)
+        if not fts_query:
+            return []
+        try:
+            return self._search_fts(fts_query, limit, arxiv_ids)
+        except sqlite3.OperationalError as exc:
+            # User-supplied FTS5 syntax (operators, NEAR, parentheses) can still
+            # be malformed; retry once treating every token as a literal.
+            literal = self.to_fts_query(query, literal=True)
+            if not literal or literal == fts_query:
+                raise
+            logger.warning(
+                f"FTS5 query {fts_query!r} failed ({exc}); retrying as literal {literal!r}"
+            )
+            return self._search_fts(literal, limit, arxiv_ids)
+
+    def _search_fts(self, fts_query: str, limit: int, arxiv_ids: list = None) -> list:
+        snippet_sql = (
+            f"snippet(chunks_fts, {self.FTS_CONTENT_COLUMN}, '[', ']', '...', 32) AS snippet"
+        )
 
         if arxiv_ids:
             placeholders = ",".join("?" for _ in arxiv_ids)
@@ -224,6 +246,7 @@ class PaperIndex:
                 SELECT c.chunk_id, c.arxiv_id, c.page_start, c.page_end,
                        c.heading, c.content, c.chunk_index,
                        p.title, p.authors,
+                       {snippet_sql},
                        rank
                 FROM chunks_fts
                 JOIN chunks c ON c.chunk_id = chunks_fts.rowid
@@ -235,10 +258,11 @@ class PaperIndex:
             """
             params = [fts_query] + arxiv_ids + [limit]
         else:
-            sql = """
+            sql = f"""
                 SELECT c.chunk_id, c.arxiv_id, c.page_start, c.page_end,
                        c.heading, c.content, c.chunk_index,
                        p.title, p.authors,
+                       {snippet_sql},
                        rank
                 FROM chunks_fts
                 JOIN chunks c ON c.chunk_id = chunks_fts.rowid
@@ -259,6 +283,7 @@ class PaperIndex:
                 "page_start": row["page_start"],
                 "page_end": row["page_end"],
                 "heading": row["heading"],
+                "snippet": row["snippet"] or (row["content"] or "")[:200],
                 "content": row["content"],
                 "chunk_index": row["chunk_index"],
                 "relevance_rank": row["rank"],
@@ -347,20 +372,69 @@ class PaperIndex:
             "db_path": self.db_path,
         }
 
+    # FTS5 keywords are case-sensitive and only recognised in upper case.
+    _FTS_KEYWORDS = frozenset({"AND", "OR", "NOT", "NEAR"})
+    _FTS_OPERATOR_RE = re.compile(r"(?:^|\s)(?:AND|OR|NOT)(?=\s|$)|\bNEAR\s*\(")
+    _FTS_BAREWORD_RE = re.compile(r"[A-Za-z0-9_]+")
+    _FTS_PHRASE = r'"[^"]*(?:""[^"]*)*"\*?'
+    _FTS_NATURAL_TOKEN_RE = re.compile(_FTS_PHRASE + r"|\S+")
+    _FTS_OPERATOR_TOKEN_RE = re.compile(_FTS_PHRASE + r'|NEAR\(|[(),]|[^\s(),]+')
+
     @staticmethod
-    def to_fts_query(query: str) -> str:
-        """Convert natural language to FTS5 query."""
-        q = query.strip()
-        # Pass through queries that already use FTS5 syntax
-        if any(op in q.upper() for op in [" AND ", " OR ", " NOT ", " NEAR("]):
-            return q
-        # Pass through quoted phrases and explicit prefix wildcards
-        if q.startswith('"') or "*" in q:
-            return q
-        tokens = q.split()
-        if len(tokens) == 1:
-            return tokens[0]
-        return " AND ".join(tokens)
+    def _fts_quote(text: str) -> str:
+        """Render text as an FTS5 string literal, doubling embedded quotes."""
+        return '"' + text.replace('"', '""') + '"'
+
+    @classmethod
+    def _fts_term(cls, token: str) -> str:
+        """Render one user token as a safe FTS5 term ("" if nothing searchable)."""
+        if len(token) >= 2 and token[0] == '"':
+            phrase = token[:-1] if token.endswith("*") else token
+            if len(phrase) >= 2 and phrase.endswith('"'):
+                # Balanced, already-quoted phrase (optionally with prefix *).
+                return token if phrase[1:-1].strip() else ""
+        prefix = token.endswith("*")
+        stem = token.rstrip("*")
+        if not stem:
+            return ""
+        if cls._FTS_BAREWORD_RE.fullmatch(stem) and stem not in cls._FTS_KEYWORDS:
+            term = stem
+        else:
+            term = cls._fts_quote(stem)
+        return term + "*" if prefix else term
+
+    @classmethod
+    def to_fts_query(cls, query: str, literal: bool = False) -> str:
+        """Convert a user query into a syntactically safe FTS5 MATCH expression.
+
+        Bare tokens become FTS5 string literals when they contain anything other
+        than ASCII letters/digits/underscore, so ``self-respect``, ``Q:A``,
+        ``don't`` and ``O"Brien`` cannot be misread as column filters or
+        syntax. Quoted phrases and trailing ``*`` prefixes are kept. Queries that
+        use upper-case AND/OR/NOT or NEAR( keep their operator structure; only
+        the operand tokens are quoted. ``literal=True`` ignores operator syntax
+        and quotes every token (used as a fallback after a syntax error).
+        """
+        q = (query or "").strip()
+        if not q:
+            return ""
+        if literal:
+            terms = [cls._fts_quote(t) for t in q.split()]
+            return " AND ".join(t for t in terms if t != '""')
+        if cls._FTS_OPERATOR_RE.search(q):
+            parts = []
+            for tok in cls._FTS_OPERATOR_TOKEN_RE.findall(q):
+                if tok in cls._FTS_KEYWORDS or tok in ("NEAR(", "(", ")", ","):
+                    parts.append(tok)
+                else:
+                    term = cls._fts_term(tok)
+                    if term:
+                        parts.append(term)
+            # Re-join without padding inside NEAR(...) / parentheses.
+            out = " ".join(parts)
+            return re.sub(r"\(\s+", "(", re.sub(r"\s+([),])", r"\1", out))
+        terms = [cls._fts_term(t) for t in cls._FTS_NATURAL_TOKEN_RE.findall(q)]
+        return " AND ".join(t for t in terms if t)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -832,7 +906,9 @@ def query_papers(
 
     Returns:
         JSON with matching text chunks, their paper title, page numbers,
-        section headings, and BM25 relevance ranking.
+        section headings, and BM25 relevance ranking. Each result has a short
+        `snippet` (matched terms wrapped in [brackets]) plus the full chunk
+        `content`.
     """
     idx = _get_index()
     arxiv_ids = None
