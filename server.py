@@ -1669,8 +1669,13 @@ def get_doi_citation(
     )
     resp.raise_for_status()
 
+    # doi.org content negotiation often omits the charset, so requests falls
+    # back to ISO-8859-1 and mangles en-dashes / accented names. CSL output
+    # is always UTF-8.
+    resp.encoding = "utf-8"
+
     if format == "citeproc":
-        return json.dumps(resp.json(), indent=2)
+        return json.dumps(json.loads(resp.text), indent=2, ensure_ascii=False)
     return resp.text.strip()
 
 
@@ -1866,23 +1871,28 @@ def _parse_openalex_work(work: dict) -> dict:
     """Parse an OpenAlex work into a clean dict."""
     authors = []
     institutions = []
-    for authorship in work.get("authorships", []):
-        a = authorship.get("author", {}) or {}
+    # OpenAlex returns explicit nulls for many nested fields (e.g.
+    # "source": null), so always use `(x.get(k) or {})` instead of
+    # `x.get(k, {})` — the default only applies when the key is missing.
+    for authorship in work.get("authorships") or []:
+        if not isinstance(authorship, dict):
+            continue
+        a = authorship.get("author") or {}
         if a.get("display_name"):
             authors.append(a["display_name"])
-        for inst in authorship.get("institutions", []) or []:
-            name = inst.get("display_name")
+        for inst in authorship.get("institutions") or []:
+            name = (inst or {}).get("display_name")
             if name and name not in institutions:
                 institutions.append(name)
 
     # Concepts (deprecated but still useful) and topics
     concepts = [
-        c.get("display_name", "") for c in (work.get("concepts") or [])[:5]
-        if c.get("display_name")
+        c["display_name"] for c in (work.get("concepts") or [])[:5]
+        if c and c.get("display_name")
     ]
     topics = [
-        t.get("display_name", "") for t in (work.get("topics") or [])[:5]
-        if t.get("display_name")
+        t["display_name"] for t in (work.get("topics") or [])[:5]
+        if t and t.get("display_name")
     ]
 
     # Best OA location for PDF
@@ -1890,26 +1900,34 @@ def _parse_openalex_work(work: dict) -> dict:
     pdf_url = oa_location.get("pdf_url") or ""
 
     # Build a clean ID (strip URL prefix)
-    work_id = work.get("id", "").replace("https://openalex.org/", "")
+    work_id = (work.get("id") or "").replace("https://openalex.org/", "")
+
+    primary_location = work.get("primary_location") or {}
+    source = primary_location.get("source") or {}
+    open_access = work.get("open_access") or {}
 
     return {
         "openalex_id": work_id,
         "doi": (work.get("doi") or "").replace("https://doi.org/", ""),
-        "title": work.get("title") or work.get("display_name") or f"[Unknown Work {work_id}]",
+        "title": (
+            work.get("title")
+            or work.get("display_name")
+            or (f"[Unknown Work {work_id}]" if work_id else "")
+        ),
         "authors": authors,
         "institutions": institutions,
         "year": work.get("publication_year"),
-        "publication_date": work.get("publication_date", ""),
+        "publication_date": work.get("publication_date") or "",
         "abstract": _openalex_abstract(work.get("abstract_inverted_index")),
-        "type": work.get("type", ""),
-        "venue": (work.get("primary_location") or {}).get("source", {}).get("display_name", "") if work.get("primary_location") else "",
-        "citation_count": work.get("cited_by_count", 0),
+        "type": work.get("type") or "",
+        "venue": source.get("display_name") or "",
+        "citation_count": work.get("cited_by_count") or 0,
         "concepts": concepts,
         "topics": topics,
-        "is_oa": work.get("open_access", {}).get("is_oa", False),
-        "oa_status": work.get("open_access", {}).get("oa_status", ""),
+        "is_oa": bool(open_access.get("is_oa")),
+        "oa_status": open_access.get("oa_status") or "",
         "pdf_url": pdf_url,
-        "url": (work.get("primary_location") or {}).get("landing_page_url", ""),
+        "url": primary_location.get("landing_page_url") or "",
     }
 
 
@@ -1919,7 +1937,7 @@ def _openalex_abstract(inverted_index: dict) -> str:
         return ""
     word_positions = []
     for word, positions in inverted_index.items():
-        for pos in positions:
+        for pos in positions or []:
             word_positions.append((pos, word))
     word_positions.sort()
     return " ".join(w for _, w in word_positions)
@@ -2033,12 +2051,12 @@ def get_openalex_work(work_id: str) -> str:
 
     # Add references and related works (just IDs and titles)
     refs = []
-    for ref_id in (work.get("referenced_works") or [])[:30]:
+    for ref_id in [r for r in (work.get("referenced_works") or []) if r][:30]:
         refs.append(ref_id.replace("https://openalex.org/", ""))
     result["referenced_works"] = refs
 
     related = []
-    for rel_id in (work.get("related_works") or [])[:20]:
+    for rel_id in [r for r in (work.get("related_works") or []) if r][:20]:
         related.append(rel_id.replace("https://openalex.org/", ""))
     result["related_works"] = related
 
@@ -2076,12 +2094,12 @@ def search_openalex_authors(query: str, max_results: int = 10) -> str:
     data = resp.json()
 
     entries = []
-    for a in data.get("results", []):
-        last_inst = (a.get("last_known_institution") or {}).get("display_name", "")
+    for a in data.get("results") or []:
+        last_inst = (a.get("last_known_institution") or {}).get("display_name") or ""
         entries.append({
             "author_id": (a.get("id") or "").replace("https://openalex.org/", ""),
-            "name": a.get("display_name", ""),
-            "orcid": a.get("orcid", ""),
+            "name": a.get("display_name") or "",
+            "orcid": a.get("orcid") or "",
             "last_known_institution": last_inst,
             "works_count": a.get("works_count", 0),
             "cited_by_count": a.get("cited_by_count", 0),
