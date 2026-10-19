@@ -42,7 +42,32 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def _datetime(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value else None
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    # Rows written before tz-aware validation may hold naive values; treat them as UTC.
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+
+
+def _legacy_timestamp(value: str | None) -> str | None:
+    """Normalize a legacy (possibly naive) timestamp to a tz-aware UTC ISO string.
+
+    Legacy tables stored naive datetimes (e.g. ``2024-01-01`` or
+    ``2024-01-01T10:00:00``); those are interpreted as UTC. Unparseable values
+    yield ``None`` so callers can fall back or preserve the raw text elsewhere.
+    """
+    if not value or not str(value).strip():
+        return None
+    text = str(value).strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
 
 
 def _json(value) -> str:
@@ -230,12 +255,17 @@ class SQLiteRepository:
             legacy_id = paper["arxiv_id"]
             scheme, value = self._legacy_identifier(legacy_id)
             work_id = f"legacy:{scheme}:{value}"
-            timestamp = paper["indexed_at"] or datetime.now(timezone.utc).isoformat()
+            timestamp = (_legacy_timestamp(paper["indexed_at"])
+                         or datetime.now(timezone.utc).isoformat())
+            published = _legacy_timestamp(paper["published"])
+            extensions = {"legacy_categories": _loads(paper["categories"], [])}
+            if paper["published"] and published is None:
+                extensions["legacy_published"] = paper["published"]
             conn.execute(
                 """INSERT OR IGNORE INTO works VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (work_id, paper["title"] or legacy_id, paper["authors"] or "[]",
-                 paper["abstract"], paper["published"], "paper", None, None,
-                 timestamp, timestamp, _json({"legacy_categories": _loads(paper["categories"], [])})),
+                 paper["abstract"], published, "paper", None, None,
+                 timestamp, timestamp, _json(extensions)),
             )
             conn.execute(
                 "INSERT OR IGNORE INTO identifiers VALUES (?, ?, ?, ?)",
