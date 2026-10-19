@@ -7,8 +7,11 @@
 - **Source adapter tools**: `search_europe_pmc`, `check_retractions`, `get_citations` (OpenCitations), `search_clinical_trials`
 - `item_type` filter on DSpace 8 search tools (default `"scholarly"`; `"any"` disables)
 - `snippet` field on `query_papers` results
+- `page` argument on `get_citations`, with `citations_has_more` / `references_has_more` flags
+- `format` field (human-readable file type) on DSpace item files
 
 ### Changed
+- README: tool counts, architecture diagram, install pin, query syntax, and troubleshooting brought up to date
 - MIT DSpace moved from the retired DSpace 6 REST API to DSpace 8 (`/server/api`)
 - `mcp` pinned to `>=1.0.0,<2`; setuptools package discovery fixed so `pip install -e .` works
 
@@ -19,6 +22,7 @@
 - DSpace 8 item and search HTTP errors now return JSON errors instead of raising
 - `research_mcp/prompts.py` syntax error; naive legacy timestamps in repository migration
 - OpenCitations adapter: v2 base URL and `page_size` parameter
+- DSpace 8 item files: MIME type was always blank; now read from the embedded format record
 
 ## [2.0.0] - 2025-04-17
 

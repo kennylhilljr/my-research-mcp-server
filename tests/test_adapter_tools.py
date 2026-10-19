@@ -195,6 +195,34 @@ class TestGetCitations:
         assert all("api.opencitations.net" in url for url, _ in router.calls)
         assert {"page": 1, "page_size": 5} in [params for _, params in router.calls]
 
+    def test_second_page_and_has_more(self):
+        router = Router([
+            ("citation-count", fake_response([{"count": "154"}])),
+            ("/citations/", fake_response(OC_CITATIONS * 2)),
+        ])
+        with patch("server.requests.get", side_effect=router):
+            out = run(get_citations("10.1037/a0017838", direction="citations",
+                                    max_results=2, page=2))
+        assert out["page"] == 2
+        assert out["citations_has_more"] is True
+        assert {"page": 2, "page_size": 2} in [params for _, params in router.calls]
+
+    def test_last_page_has_no_more(self):
+        router = Router([
+            ("citation-count", fake_response([{"count": "1"}])),
+            ("/citations/", fake_response(OC_CITATIONS)),
+        ])
+        with patch("server.requests.get", side_effect=router):
+            out = run(get_citations("10.1037/a0017838", direction="citations", max_results=5))
+        assert out["page"] == 1
+        assert out["citations_has_more"] is False
+
+    def test_invalid_page(self):
+        with patch("server.requests.get") as g:
+            out = run(get_citations("10.1/x", page=0))
+        assert "error" in out
+        g.assert_not_called()
+
     def test_errors(self):
         assert "error" in run(get_citations("10.1/x", direction="sideways"))
         with patch("server.requests.get", return_value=fake_response({}, status_code=500)):

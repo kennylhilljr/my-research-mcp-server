@@ -221,6 +221,38 @@ class TestMitTools:
         )
 
 
+class TestDspace8Bitstreams:
+    """DSpace 8 keeps a file's MIME type on its format record, not in metadata."""
+
+    def _get(self, bitstream):
+        responses = [
+            _resp(200, MIT_ITEM),
+            _resp(200, {"_embedded": {"bundles": [{"name": "ORIGINAL", "uuid": "b1"}]}}),
+            _resp(200, {"_embedded": {"bitstreams": [bitstream]}}),
+        ]
+        with patch("server.requests.get", side_effect=responses) as g:
+            result = _dspace8_get_item("harvard", UUID)
+        return result, g
+
+    def test_mime_type_from_embedded_format(self):
+        result, g = self._get({
+            "name": "thesis.pdf", "sizeBytes": 5, "uuid": "f1", "metadata": {},
+            "_embedded": {"format": {"mimetype": "application/pdf",
+                                     "shortDescription": "Adobe PDF"}},
+        })
+        assert result["bitstreams"][0]["mime_type"] == "application/pdf"
+        assert result["bitstreams"][0]["format"] == "Adobe PDF"
+        assert g.call_args_list[2].kwargs["params"] == {"embed": "format"}
+
+    def test_mime_type_falls_back_to_metadata(self):
+        result, _ = self._get({
+            "name": "old.pdf", "sizeBytes": 5, "uuid": "f2",
+            "metadata": {"dc.format.mimetype": [{"value": "application/pdf"}]},
+        })
+        assert result["bitstreams"][0]["mime_type"] == "application/pdf"
+        assert result["bitstreams"][0]["format"] == ""
+
+
 # ── _dspace8_get_item error handling ────────────────────────────────────
 
 class TestDspace8GetItemErrors:

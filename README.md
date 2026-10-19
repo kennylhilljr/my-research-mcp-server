@@ -3,9 +3,9 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io/)
-[![Tools](https://img.shields.io/badge/tools-49-orange.svg)](#tools-49-total)
+[![Tools](https://img.shields.io/badge/tools-53-orange.svg)](#tools-53-total)
 
-A multi-source academic research platform built on the [Model Context Protocol](https://modelcontextprotocol.io/). Searches, downloads, indexes, and queries scholarly content from 15 source categories through 53 tools — backed by SQLite FTS5 full-text search, DuckDB analytics, and local semantic vector search.
+A multi-source academic research platform built on the [Model Context Protocol](https://modelcontextprotocol.io/). Searches, downloads, indexes, and queries scholarly content from 15 source categories through 53 tools, backed by SQLite FTS5 full-text search, DuckDB analytics, and local semantic vector search.
 
 ## Prerequisites
 
@@ -77,11 +77,12 @@ Crawlable projects for local FTS indexing: Keycloak, Ory (Kratos/Hydra/Keto/Oath
 ```mermaid
 graph TD
     Client["MCP Client<br/>(Claude Desktop / Claude Code / IDE)"]
-    Server["My Research MCP Server<br/>49 Tools (FastMCP)"]
+    Server["My Research MCP Server<br/>53 Tools (FastMCP)"]
 
     Client -->|"MCP Protocol<br/>(stdio / SSE)"| Server
 
-    Server --> Academic["Academic APIs<br/>arXiv, Semantic Scholar,<br/>OpenAlex, CORE,<br/>Crossref, Unpaywall"]
+    Server --> Academic["Academic APIs<br/>arXiv, Semantic Scholar,<br/>OpenAlex, CORE, OSF,<br/>Crossref, Unpaywall"]
+    Server --> Biomed["Biomedical & Citations<br/>Europe PMC, OpenCitations,<br/>ClinicalTrials.gov,<br/>retraction checks"]
     Server --> Institutional["Institutional Repos<br/>MIT, Harvard,<br/>Cornell, Penn"]
     Server --> Cloud["Cloud Docs<br/>AWS, GCP,<br/>MS Learn"]
     Server --> IAM["IAM Docs<br/>Google PSE / Vertex /<br/>Brave / SerpAPI"]
@@ -93,7 +94,7 @@ graph TD
 ```mermaid
 graph TD
     subgraph Server["My Research MCP Server"]
-        FastMCP["FastMCP Layer<br/>49 @mcp.tool() functions"]
+        FastMCP["FastMCP Layer<br/>53 @mcp.tool() functions"]
 
         FastMCP --> HTTP["HTTP Clients<br/>requests + rate limiters<br/>(3s arXiv, 1s S2, 6.5s CORE)"]
         FastMCP --> PaperIndex["Paper Index<br/>SQLite FTS5 + BM25<br/>papers, chunks, chunks_fts"]
@@ -186,7 +187,7 @@ sequenceDiagram
 ### Full-Text Search (2 tools)
 | Tool | Description |
 |------|-------------|
-| `query_papers` | **Full-text search across all indexed paper content** — finds specific passages, methods, results, equations |
+| `query_papers` | **Full-text search across all indexed paper content**: finds specific passages, methods, results, and equations, with a bracketed snippet of each match |
 | `get_paper_text` | Retrieve full text or specific pages of an indexed paper |
 
 ### Management (3 tools)
@@ -206,7 +207,7 @@ sequenceDiagram
 | Tool | Description |
 |------|-------------|
 | `search_mit_dspace` | Search MIT's 60,000+ works (theses, reports, articles) |
-| `get_mit_dspace_item` | Get full metadata + downloadable files for an MIT DSpace item |
+| `get_mit_dspace_item` | Get full metadata and downloadable files (name, size, MIME type) for an MIT DSpace item |
 | `search_harvard_dash` | Search Harvard's 58,000+ open-access works |
 | `get_harvard_dash_item` | Get full metadata for a Harvard DASH item |
 | `search_cornell_ecommons` | Search Cornell's 24,000+ works (CS, engineering, policy) |
@@ -240,7 +241,7 @@ sequenceDiagram
 |------|-------------|
 | `search_europe_pmc` | Search Europe PMC (PubMed/PMC/preprints) with MeSH headings, PMID/PMCID/DOI, and cursor paging |
 | `check_retractions` | Check DOIs for retractions, corrections, and expressions of concern (Crossref updated-by/update-to plus OpenAlex is_retracted) |
-| `get_citations` | OpenCitations citation graph for a DOI: citing works, cited references, and total counts |
+| `get_citations` | OpenCitations citation graph for a DOI: citing works, cited references, and total counts; up to 50 links per page with `page` for more |
 | `search_clinical_trials` | Search ClinicalTrials.gov (v2) studies with condition, intervention, status, and phase filters |
 
 ### CORE (3 tools)
@@ -290,8 +291,10 @@ sequenceDiagram
 ### 1. Install dependencies
 
 ```bash
-pip install mcp requests pymupdf duckdb google-auth fastembed
+pip install "mcp<2" requests pymupdf duckdb google-auth fastembed
 ```
+
+The server targets the MCP Python SDK 1.x. Version 2 removed the `mcp.server.fastmcp` module it imports, so keep the `<2` pin.
 
 Or install as a package:
 
@@ -350,7 +353,8 @@ au:vaswani AND ti:attention
 ```
 gradient descent convergence            # implicit AND
 "self-supervised learning"              # exact phrase
-attention AND mechanism                 # explicit AND
+self-attention                          # hyphens and punctuation are handled for you
+attention AND mechanism                 # explicit AND (operators must be upper-case)
 transformer OR attention                # OR
 NEAR(policy gradient, 10)              # proximity (within 10 tokens)
 reinforc*                               # prefix matching
@@ -375,7 +379,7 @@ reinforc*                               # prefix matching
 | `VERTEX_AI_IAM_ENGINE_ID` | _(unset)_ | Vertex AI Search engine ID for IAM docs |
 | `BRAVE_SEARCH_API_KEY` | _(unset)_ | Brave Search API key (IAM docs fallback) |
 | `SERPAPI_API_KEY` | _(unset)_ | SerpAPI key (IAM docs fallback) |
-| `GITHUB_TOKEN` | _(unset)_ | GitHub PAT — required for code search, optional for repo search |
+| `GITHUB_TOKEN` | _(unset)_ | GitHub PAT; required for code search, optional for repo search |
 | `DUCKDB_DATASETS_DIR` | `~/research-datasets` | Root directory for Parquet/CSV/JSON dataset files |
 | `EMBED_MODEL_NAME` | `BAAI/bge-small-en-v1.5` | fastembed ONNX model for semantic search |
 | `EMBED_DIM` | `384` | Embedding vector dimensions (must match model) |
@@ -383,12 +387,12 @@ reinforc*                               # prefix matching
 
 ## How Indexing Works
 
-1. **Text extraction** — PyMuPDF reads every page of the PDF
-2. **Heading detection** — Heuristics identify section headings (numbered sections, ALL-CAPS, common academic titles)
-3. **Chunking** — Text is split into ~1500-char overlapping segments, each tagged with page range and nearest heading
-4. **Content hashing** — SHA-256 hash detects when a PDF changes and needs re-indexing
-5. **FTS5 indexing** — Porter stemming + Unicode tokenization enables fuzzy, stemmed search with BM25 ranking
-6. **Triggers** — SQLite triggers keep the FTS index in sync on every insert/update/delete
+1. **Text extraction**: PyMuPDF reads every page of the PDF
+2. **Heading detection**: heuristics identify section headings (numbered sections, ALL-CAPS, common academic titles)
+3. **Chunking**: text is split into ~1500-char overlapping segments, each tagged with page range and nearest heading
+4. **Content hashing**: a SHA-256 hash detects when a PDF changes and needs re-indexing
+5. **FTS5 indexing**: Porter stemming + Unicode tokenization enables fuzzy, stemmed search with BM25 ranking
+6. **Triggers**: SQLite triggers keep the FTS index in sync on every insert/update/delete
 
 ## Example Session
 
@@ -431,6 +435,19 @@ The first call to `embed_chunks` downloads the ONNX model (~100 MB). If this fai
 ```bash
 python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
 ```
+
+### Install fails building `cryptography`
+
+On a Mac running an Intel (x86_64) build of Python 3.10, the newest `cryptography` release may not build from source. Install a prebuilt wheel first, then the package:
+
+```bash
+pip install --only-binary cryptography "cryptography<46"
+pip install -e ".[dev]"
+```
+
+### DSpace repositories return HTTP 429
+
+MIT, Harvard, Cornell, and Penn rate-limit their APIs. The tools return a JSON error with a `retry_after` value (in seconds) instead of failing; wait that long and retry.
 
 ### CORE API returns 429 errors
 

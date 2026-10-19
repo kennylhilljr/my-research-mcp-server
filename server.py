@@ -1403,17 +1403,21 @@ def _dspace8_get_item(repo_key: str, uuid: str) -> dict:
             if bundle.get("name") == "ORIGINAL":
                 bs_list_resp = requests.get(
                     f"{api_base}/core/bundles/{bundle['uuid']}/bitstreams",
+                    params={"embed": "format"},
                     headers={"Accept": "application/json"},
                     timeout=30,
                 )
                 bs_list_resp.raise_for_status()
                 for b in bs_list_resp.json().get("_embedded", {}).get("bitstreams", []):
+                    # DSpace 8 keeps the type on the embedded format record;
+                    # older items may still carry dc.format.mimetype.
+                    fmt = (b.get("_embedded") or {}).get("format") or {}
+                    meta_mime = (b.get("metadata") or {}).get("dc.format.mimetype") or [{}]
                     bitstreams.append({
                         "name": b.get("name", ""),
                         "size_bytes": b.get("sizeBytes", 0),
-                        "mime_type": b.get("metadata", {}).get(
-                            "dc.format.mimetype", [{}]
-                        )[0].get("value", "") if b.get("metadata") else "",
+                        "mime_type": fmt.get("mimetype") or meta_mime[0].get("value", ""),
+                        "format": fmt.get("shortDescription", ""),
                         "retrieve_link": f"{api_base}/core/bitstreams/{b['uuid']}/content",
                     })
     except Exception as e:
@@ -4184,7 +4188,7 @@ def semantic_search(query: str, max_results: int = 10, arxiv_id: str = "") -> st
 # HTTP failures; each tool converts failures into the usual {"error": ...} JSON.
 # DataCite has an adapter too, but resolve_doi already covers DataCite DOIs.
 
-from research_mcp.adapters.base import AdapterError, BaseAdapter  # noqa: E402
+from research_mcp.adapters.base import AdapterError, BaseAdapter, encode_cursor  # noqa: E402
 from research_mcp.adapters.clinical_trials import ClinicalTrialsAdapter  # noqa: E402
 from research_mcp.adapters.europe_pmc import EuropePMCAdapter  # noqa: E402
 from research_mcp.adapters.opencitations import OpenCitationsAdapter  # noqa: E402
@@ -4448,7 +4452,9 @@ def _opencitations_ids(value: str) -> dict:
 
 
 @mcp.tool()
-async def get_citations(doi: str, direction: str = "both", max_results: int = 50) -> str:
+async def get_citations(
+    doi: str, direction: str = "both", max_results: int = 50, page: int = 1
+) -> str:
     """
     Get the citation graph for a DOI from OpenCitations (open COCI/Crossref,
     OpenAIRE, and other sources): works that cite it and works it cites.
@@ -4458,6 +4464,8 @@ async def get_citations(doi: str, direction: str = "both", max_results: int = 50
         direction: "citations" (citing works), "references" (cited works), or
                    "both" (default).
         max_results: 1-50 citation links to return per direction (default 50).
+        page: 1-based page number for paging past the first max_results links
+              (default 1). Check citations_has_more / references_has_more.
 
     Returns:
         JSON with total citation/reference counts and, per direction, entries
@@ -4470,12 +4478,15 @@ async def get_citations(doi: str, direction: str = "both", max_results: int = 50
                           indent=2)
     if not doi:
         return json.dumps({"error": "doi must not be empty"}, indent=2)
+    if not isinstance(page, int) or page < 1:
+        return json.dumps({"error": "page must be a positive integer"}, indent=2)
 
-    logger.info(f"OpenCitations lookup ({direction}): {doi}")
+    logger.info(f"OpenCitations lookup ({direction}, page {page}): {doi}")
     adapter = OpenCitationsAdapter(_AdapterHTTPClient(),
                                    max_response_bytes=OPENCITATIONS_MAX_BYTES)
     page_size = _clamp(max_results, 1, ADAPTER_PAGE_MAX)
-    result = {"doi": doi, "source": "OpenCitations"}
+    result = {"doi": doi, "source": "OpenCitations", "page": page}
+    cursor = encode_cursor(adapter.name, {"page": page}) if page > 1 else None
     wanted = ["citations", "references"] if direction == "both" else [direction]
     try:
         for kind in wanted:
@@ -4484,11 +4495,11 @@ async def get_citations(doi: str, direction: str = "both", max_results: int = 50
                 f"{adapter.api_url}/{'citation' if kind == 'citations' else 'reference'}"
                 f"-count/doi:{doi}"
             )
-            page = await adapter.search(SearchRequest(
-                query=doi, filters={"direction": kind}, page_size=page_size,
+            found = await adapter.search(SearchRequest(
+                query=doi, filters={"direction": kind}, page_size=page_size, cursor=cursor,
             ))
             entries = []
-            for item in page.items:
+            for item in found.items:
                 record = item.extensions.get("opencitations", {})
                 ids = _opencitations_ids(record.get(other))
                 entries.append({
@@ -4503,6 +4514,7 @@ async def get_citations(doi: str, direction: str = "both", max_results: int = 50
             total = count[0].get("count") if isinstance(count, list) and count else None
             result[f"{kind}_count"] = int(total) if str(total or "").isdigit() else len(entries)
             result[kind] = entries
+            result[f"{kind}_has_more"] = found.next_cursor is not None
     except (AdapterError, ValueError) as e:
         return json.dumps({"error": f"OpenCitations lookup failed: {e}", "doi": doi}, indent=2)
     return json.dumps(result, indent=2)

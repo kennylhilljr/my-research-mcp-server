@@ -189,7 +189,7 @@ FastMCP server
 
 ## Dependencies
 
-- `mcp>=1.0.0` — FastMCP server framework
+- `mcp>=1.0.0,<2`: FastMCP server framework (2.x removed `mcp.server.fastmcp`)
 - `requests>=2.28.0` — HTTP client
 - `pymupdf>=1.23.0` — PDF text extraction (imported as `fitz`)
 - `duckdb>=1.0.0` — Analytics SQL engine + vector search
