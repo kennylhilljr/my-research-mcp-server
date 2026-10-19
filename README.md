@@ -3,9 +3,9 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io/)
-[![Tools](https://img.shields.io/badge/tools-47-orange.svg)](#tools-47-total)
+[![Tools](https://img.shields.io/badge/tools-49-orange.svg)](#tools-49-total)
 
-A multi-source academic research platform built on the [Model Context Protocol](https://modelcontextprotocol.io/). Searches, downloads, indexes, and queries scholarly content from 13 source categories through 47 tools — backed by SQLite FTS5 full-text search, DuckDB analytics, and local semantic vector search.
+A multi-source academic research platform built on the [Model Context Protocol](https://modelcontextprotocol.io/). Searches, downloads, indexes, and queries scholarly content from 14 source categories through 49 tools — backed by SQLite FTS5 full-text search, DuckDB analytics, and local semantic vector search.
 
 ## Prerequisites
 
@@ -22,6 +22,7 @@ A multi-source academic research platform built on the [Model Context Protocol](
 |--------|--------|-------|-------------|
 | **arXiv** | arxiv.org | 2.4M+ preprints | Open-access preprints in physics, math, CS, biology, finance, and more. Full search + PDF download + indexing. |
 | **Semantic Scholar** | api.semanticscholar.org | 200M+ papers | Cross-repository search spanning arXiv, PubMed, ACM, IEEE, Springer, Elsevier, and thousands more. Citation graphs and open-access PDF links. |
+| **OSF / PsyArXiv** | osf.io (via share.osf.io) | Preprints, registrations, projects | All OSF preprint servers (PsyArXiv, SocArXiv, and others), preregistered studies, and project pages, searched through SHARE, OSF's index. No key required. |
 | **OpenAlex** | openalex.org | 250M+ works | Free CC0 catalog of scholarly works, authors, institutions, and concepts. Aggregates from Crossref, PubMed, institutional repos, and more. |
 | **CORE** | core.ac.uk | 200M+ works | Largest aggregator of open-access research from 11,000+ repositories worldwide. Best for technical reports, working papers, theses, and grey literature. |
 | **Crossref** | api.crossref.org | 150M+ works | DOI registration agency. Metadata for journal articles, conference proceedings, books, and datasets. Citation-formatted output (BibTeX, APA, RIS). |
@@ -73,7 +74,7 @@ Crawlable projects for local FTS indexing: Keycloak, Ory (Kratos/Hydra/Keto/Oath
 ```mermaid
 graph TD
     Client["MCP Client<br/>(Claude Desktop / Claude Code / IDE)"]
-    Server["My Research MCP Server<br/>47 Tools (FastMCP)"]
+    Server["My Research MCP Server<br/>49 Tools (FastMCP)"]
 
     Client -->|"MCP Protocol<br/>(stdio / SSE)"| Server
 
@@ -89,7 +90,7 @@ graph TD
 ```mermaid
 graph TD
     subgraph Server["My Research MCP Server"]
-        FastMCP["FastMCP Layer<br/>47 @mcp.tool() functions"]
+        FastMCP["FastMCP Layer<br/>49 @mcp.tool() functions"]
 
         FastMCP --> HTTP["HTTP Clients<br/>requests + rate limiters<br/>(3s arXiv, 1s S2, 6.5s CORE)"]
         FastMCP --> PaperIndex["Paper Index<br/>SQLite FTS5 + BM25<br/>papers, chunks, chunks_fts"]
@@ -164,7 +165,7 @@ sequenceDiagram
 
 ---
 
-## Tools (47 total)
+## Tools (49 total)
 
 ### arXiv API (2 tools)
 | Tool | Description |
@@ -224,6 +225,12 @@ sequenceDiagram
 | `search_openalex` | Search 250M+ works in OpenAlex (free, CC0 catalog) |
 | `get_openalex_work` | Get full metadata for an OpenAlex work |
 | `search_openalex_authors` | Search for authors with publication stats |
+
+### OSF and PsyArXiv (2 tools)
+| Tool | Description |
+|------|-------------|
+| `search_osf` | Search OSF preprints, study registrations, or projects; optional preprint server filter; sort by relevance or newest |
+| `search_psyarxiv` | Search psychology preprints on PsyArXiv by title, abstract, and keywords |
 
 ### CORE (3 tools)
 | Tool | Description |

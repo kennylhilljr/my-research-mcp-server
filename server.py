@@ -2096,6 +2096,171 @@ def search_openalex_authors(query: str, max_results: int = 10) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# OSF AND PSYARXIV TOOLS (via SHARE, the OSF search index)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# OSF (https://osf.io) hosts preprint servers such as PsyArXiv, study
+# registrations (preregistered research, often still in progress), and
+# project pages. OSF's own v2 API only filters exact fields such as title, so
+# search runs through SHARE (https://share.osf.io), the index behind the OSF
+# search page. No API key is required.
+
+SHARE_SEARCH_URL = "https://share.osf.io/api/v3/index-card-search"
+PSYARXIV_PUBLISHER = "https://osf.io/preprints/psyarxiv"
+OSF_SORTS = {"relevance": None, "newest": "-dateCreated"}
+OSF_RESOURCE_TYPES = {
+    "preprint": "Preprint",
+    "registration": "Registration",
+    "project": "Project",
+    "any": "Preprint,Registration,Project",
+}
+
+
+def _share_values(meta: dict, key: str) -> list:
+    """Return the @value strings of a SHARE metadata property."""
+    return [
+        v["@value"]
+        for v in (meta.get(key) or [])
+        if isinstance(v, dict) and "@value" in v
+    ]
+
+
+def _parse_share_card(meta: dict) -> dict:
+    """Flatten a SHARE index-card resourceMetadata record."""
+    osf_url = meta.get("@id") or ""
+    guid = osf_url.rstrip("/").rsplit("/", 1)[-1] if osf_url else ""
+    candidates = _share_values(meta, "identifier") + [
+        s.get("@id", "") for s in (meta.get("sameAs") or []) if isinstance(s, dict)
+    ]
+    doi = next((c.split("doi.org/", 1)[1] for c in candidates if "doi.org/" in c), "")
+    authors = []
+    for creator in meta.get("creator") or []:
+        names = _share_values(creator, "name")
+        if names:
+            authors.append(names[0])
+    licenses = [n for r in (meta.get("rights") or []) for n in _share_values(r, "name")]
+    types = [t.get("@id", "") for t in (meta.get("resourceType") or []) if isinstance(t, dict)]
+    publishers = [n for p in (meta.get("publisher") or []) for n in _share_values(p, "name")]
+    is_preprint = "Preprint" in types
+    return {
+        "id": guid,
+        "resource_type": types[0] if types else "",
+        "title": next(iter(_share_values(meta, "title")), ""),
+        "authors": authors,
+        "date_created": next(iter(_share_values(meta, "dateCreated")), ""),
+        "abstract": next(iter(_share_values(meta, "description")), ""),
+        "keywords": _share_values(meta, "keyword"),
+        "publisher": publishers[0] if publishers else "",
+        "doi": doi,
+        "url": osf_url,
+        "download_url": f"https://osf.io/{guid}/download" if guid and is_preprint else "",
+        "license": licenses[0] if licenses else "",
+    }
+
+
+def _share_search(query: str, max_results: int, sort: str, resource_type: str,
+                  publisher: str = None) -> dict:
+    """Run a SHARE index-card search and return parsed entries in ranked order."""
+    params = {"cardSearchText": query, "page[size]": _clamp(max_results, 1, 100)}
+    params["cardSearchFilter[resourceType]"] = OSF_RESOURCE_TYPES[resource_type]
+    if publisher:
+        params["cardSearchFilter[publisher]"] = publisher
+    if OSF_SORTS[sort]:
+        params["sort"] = OSF_SORTS[sort]
+
+    resp = requests.get(
+        SHARE_SEARCH_URL,
+        params=params,
+        headers={"Accept": "application/vnd.api+json"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    included = data.get("included", [])
+    cards = {
+        i["id"]: i.get("attributes", {}).get("resourceMetadata", {})
+        for i in included
+        if i.get("type") == "index-card"
+    }
+    results = {i["id"]: i for i in included if i.get("type") == "search-result"}
+    page = data.get("data", {}).get("relationships", {}).get("searchResultPage", {})
+
+    entries = []
+    for ref in page.get("data", []):
+        card_ref = results.get(ref.get("id"), {}).get("relationships", {}).get("indexCard", {})
+        meta = cards.get(card_ref.get("data", {}).get("id"))
+        if meta:
+            entries.append(_parse_share_card(meta))
+    total = data.get("data", {}).get("attributes", {}).get("totalResultCount", 0)
+    return {"total_results": total, "results_count": len(entries), "entries": entries}
+
+
+@mcp.tool()
+def search_osf(
+    query: str,
+    resource_type: str = "preprint",
+    provider: str = None,
+    max_results: int = 10,
+    sort: str = "relevance",
+) -> str:
+    """
+    Search OSF: preprints from every OSF preprint server, study registrations
+    (preregistered research, often still in progress), and project pages.
+    Matches titles, descriptions, and keywords through the SHARE index.
+
+    Args:
+        query: Search terms (e.g. "romance scam victims").
+        resource_type: "preprint" (default), "registration", "project", or
+                       "any" (all three; excludes bare files and user pages).
+        provider: Optional preprint server slug to restrict results
+                  (e.g. "psyarxiv", "socarxiv").
+        max_results: 1-100 results to return (default 10).
+        sort: "relevance" (default) or "newest".
+
+    Returns:
+        JSON with total results and entries including resource type, title,
+        authors, date, abstract, keywords, publisher, DOI, OSF URL, PDF
+        download URL for preprints, and license.
+    """
+    if resource_type not in OSF_RESOURCE_TYPES:
+        return json.dumps({
+            "error": f"resource_type must be one of: {', '.join(OSF_RESOURCE_TYPES)}",
+        }, indent=2)
+    if sort not in OSF_SORTS:
+        return json.dumps({"error": f"sort must be one of: {', '.join(OSF_SORTS)}"}, indent=2)
+
+    publisher = f"https://osf.io/preprints/{provider.strip().lower()}" if provider else None
+    logger.info(f"OSF search ({resource_type}, {provider or 'all'}): {query}")
+    result = _share_search(query, max_results, sort, resource_type, publisher)
+    return json.dumps({"query": query, "source": "OSF (via SHARE)", **result}, indent=2)
+
+
+@mcp.tool()
+def search_psyarxiv(query: str, max_results: int = 10, sort: str = "relevance") -> str:
+    """
+    Search PsyArXiv, the main preprint server for psychology and behavioral
+    science. Matches titles, abstracts, and keywords through the SHARE index.
+    For other OSF preprint servers or study registrations, use search_osf.
+
+    Args:
+        query: Search terms (e.g. "gaslighting intimate relationships").
+        max_results: 1-100 results to return (default 10).
+        sort: "relevance" (default) or "newest".
+
+    Returns:
+        JSON with total results and entries including title, authors, date,
+        abstract, keywords, DOI, OSF URL, PDF download URL, and license.
+    """
+    if sort not in OSF_SORTS:
+        return json.dumps({"error": f"sort must be one of: {', '.join(OSF_SORTS)}"}, indent=2)
+
+    logger.info(f"PsyArXiv search: {query}")
+    result = _share_search(query, max_results, sort, "preprint", PSYARXIV_PUBLISHER)
+    return json.dumps({"query": query, "source": "PsyArXiv (via SHARE)", **result}, indent=2)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CORE TOOLS
 # ═══════════════════════════════════════════════════════════════════════════
 # CORE (https://core.ac.uk) — Largest aggregator of OA papers (200M+ works
