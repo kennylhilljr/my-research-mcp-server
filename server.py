@@ -3946,6 +3946,413 @@ def semantic_search(query: str, max_results: int = 10, arxiv_id: str = "") -> st
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# SOURCE ADAPTER TOOLS (Europe PMC, Crossref updates, OpenCitations, ClinicalTrials.gov)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Thin MCP wrappers around the bounded, tested adapters in research_mcp/adapters.
+# The adapters cap page size (50) and response size, and raise AdapterError on
+# HTTP failures; each tool converts failures into the usual {"error": ...} JSON.
+# DataCite has an adapter too, but resolve_doi already covers DataCite DOIs.
+
+from research_mcp.adapters.base import AdapterError, BaseAdapter  # noqa: E402
+from research_mcp.adapters.clinical_trials import ClinicalTrialsAdapter  # noqa: E402
+from research_mcp.adapters.europe_pmc import EuropePMCAdapter  # noqa: E402
+from research_mcp.adapters.opencitations import OpenCitationsAdapter  # noqa: E402
+from research_mcp.adapters.retractions import RetractionWatchAdapter  # noqa: E402
+from research_mcp.models import SearchRequest  # noqa: E402
+
+ADAPTER_PAGE_MAX = 50
+ADAPTER_USER_AGENT = (
+    f"my-research-mcp (mailto:{OPENALEX_EMAIL or UNPAYWALL_EMAIL})"
+)
+OPENCITATIONS_MAX_BYTES = 16 * 1024 * 1024
+CHECK_RETRACTIONS_MAX_DOIS = 25
+_UPDATE_SEVERITY = {
+    "retraction": "retracted",
+    "withdrawal": "retracted",
+    "removal": "retracted",
+    "partial_retraction": "partially_retracted",
+    "expression_of_concern": "expression_of_concern",
+    "correction": "corrected",
+    "erratum": "corrected",
+    "corrigendum": "corrected",
+}
+_STATUS_RANK = [
+    "clean", "updated", "corrected", "expression_of_concern", "partially_retracted", "retracted",
+]
+
+
+class _AdapterHTTPClient:
+    """requests-backed client for the adapters (adds a polite User-Agent)."""
+
+    def get(self, url, params=None, timeout=20.0):
+        return requests.get(
+            url,
+            params=params or {},
+            timeout=timeout,
+            headers={"User-Agent": ADAPTER_USER_AGENT, "Accept": "application/json"},
+        )
+
+
+class _OpenAlexSignal(BaseAdapter):
+    """Bounded OpenAlex lookup reused for the is_retracted flag."""
+
+    name = "openalex"
+
+
+def _adapter_date(value) -> str:
+    return value.date().isoformat() if value else ""
+
+
+def _crossref_update_date(update: dict) -> str:
+    updated = update.get("updated") or {}
+    parts = (updated.get("date-parts") or [[]])[0]
+    if parts and all(isinstance(p, int) for p in parts):
+        return "-".join(f"{p:02d}" if i else str(p) for i, p in enumerate(parts))
+    return str(updated.get("date-time") or "")[:10]
+
+
+def _crossref_update_entry(update: dict, notice_doi: str, target_doi: str) -> dict:
+    kind = str(update.get("type") or "").lower().replace("-", "_").replace(" ", "_")
+    return {
+        "type": kind or "update",
+        "label": update.get("label") or "",
+        "date": _crossref_update_date(update),
+        "notice_doi": notice_doi,
+        "target_doi": target_doi,
+        "source": update.get("source") or "",
+    }
+
+
+def _check_one_doi(doi: str, crossref, openalex) -> dict:
+    """Collect Crossref update relations and the OpenAlex retraction flag for one DOI."""
+    result = {
+        "doi": doi,
+        "title": "",
+        "crossref_type": "",
+        "updated_by": [],
+        "update_to": [],
+        "relations": {},
+        "openalex_is_retracted": None,
+        "errors": [],
+    }
+    found = False
+    seen = set()
+
+    def add(bucket: str, entry: dict) -> None:
+        key = (bucket, entry["type"], entry["notice_doi"].lower(), entry["target_doi"].lower())
+        if key not in seen:
+            seen.add(key)
+            result[bucket].append(entry)
+
+    # 1) The work record itself: updated-by (notices about it), update-to (it is a notice).
+    try:
+        message = crossref.get_json(f"{crossref.api_url}/{doi}").get("message", {})
+        found = True
+        result["title"] = (message.get("title") or [""])[0]
+        result["crossref_type"] = message.get("type", "")
+        for update in message.get("updated-by") or []:
+            add("updated_by", _crossref_update_entry(update, update.get("DOI", ""), doi))
+        for update in message.get("update-to") or []:
+            add("update_to", _crossref_update_entry(update, doi, update.get("DOI", "")))
+        result["relations"] = {
+            name: [r.get("id", "") for r in rels if isinstance(r, dict)]
+            for name, rels in (message.get("relation") or {}).items()
+            if any(w in name for w in ("retract", "correct", "concern", "update", "replace"))
+        }
+    except AdapterError as e:
+        result["errors"].append(f"crossref work: {e}")
+
+    # 2) Notices that point at this DOI (catches records lacking updated-by).
+    try:
+        payload = crossref.get_json(
+            crossref.api_url,
+            params={"filter": f"updates:{doi}", "rows": 20,
+                    "select": "DOI,title,update-to"},
+        )
+        for item in payload.get("message", {}).get("items", []):
+            for update in item.get("update-to") or []:
+                if str(update.get("DOI", "")).lower() == doi.lower():
+                    add("updated_by", _crossref_update_entry(update, item.get("DOI", ""), doi))
+    except AdapterError as e:
+        result["errors"].append(f"crossref notices: {e}")
+
+    # 3) OpenAlex is_retracted flag.
+    try:
+        work = openalex.get_json(
+            f"{OPENALEX_API_BASE}/works/doi:{doi}",
+            params=_openalex_params({"select": "id,doi,is_retracted"}),
+        )
+        found = True
+        result["openalex_is_retracted"] = bool(work.get("is_retracted"))
+    except AdapterError as e:
+        result["errors"].append(f"openalex: {e}")
+
+    status = "clean"
+    for entry in result["updated_by"]:
+        candidate = _UPDATE_SEVERITY.get(entry["type"], "updated")
+        if _STATUS_RANK.index(candidate) > _STATUS_RANK.index(status):
+            status = candidate
+    if result["openalex_is_retracted"]:
+        status = "retracted"
+    if not found:
+        status = "not_found" if all("404" in e for e in result["errors"]) else "error"
+    elif status == "clean" and result["update_to"]:
+        status = "is_update_notice"
+    result["status"] = status
+    if not result["errors"]:
+        del result["errors"]
+    return result
+
+
+@mcp.tool()
+async def search_europe_pmc(
+    query: str,
+    max_results: int = 10,
+    open_access_only: bool = False,
+    cursor: str = None,
+) -> str:
+    """
+    Search Europe PMC (PubMed, PMC, preprints and more) for biomedical and life
+    science literature, including MeSH subject headings for each record.
+
+    Args:
+        query: Europe PMC query (supports fielded syntax, e.g. "gaslighting"
+               or 'TITLE:"coercive control" AND PUB_YEAR:[2015 TO 2025]').
+        max_results: 1-50 results to return (default 10).
+        open_access_only: Restrict to open-access full-text records.
+        cursor: next_cursor value from a previous call to fetch the next page.
+
+    Returns:
+        JSON with entries including title, authors, publication date, PMID,
+        PMCID, DOI, abstract, MeSH headings, and Europe PMC URL, plus a
+        next_cursor for paging.
+    """
+    filters = {"open_access": True} if open_access_only else {}
+    logger.info(f"Europe PMC search: {query}")
+    try:
+        page = await EuropePMCAdapter(_AdapterHTTPClient()).search(SearchRequest(
+            query=query, filters=filters, cursor=cursor or None,
+            page_size=_clamp(max_results, 1, ADAPTER_PAGE_MAX),
+        ))
+    except (AdapterError, ValueError) as e:
+        return json.dumps({"error": f"Europe PMC search failed: {e}", "query": query}, indent=2)
+
+    entries = [{
+        "title": item.title,
+        "authors": item.authors,
+        "published": _adapter_date(item.published_at),
+        "pmid": item.identifiers.get("pmid", ""),
+        "pmcid": item.identifiers.get("pmcid", ""),
+        "doi": item.identifiers.get("doi", ""),
+        "abstract": re.sub(r"<[^>]+>", "", item.abstract_excerpt or "").strip(),
+        "mesh_headings": item.extensions.get("europe_pmc", {}).get("mesh_headings", []),
+        "url": item.provenance.canonical_url if item.provenance else "",
+    } for item in page.items]
+    return json.dumps({
+        "query": query,
+        "source": "Europe PMC",
+        "results_count": len(entries),
+        "next_cursor": page.next_cursor,
+        "entries": entries,
+    }, indent=2)
+
+
+@mcp.tool()
+async def check_retractions(dois: list[str]) -> str:
+    """
+    Check DOIs for retractions, corrections, expressions of concern, and other
+    editorial updates. Looks each DOI up in Crossref (updated-by / update-to
+    relations, including Retraction Watch data, plus notices that declare an
+    update to the DOI) and reads OpenAlex's is_retracted flag.
+
+    Args:
+        dois: List of DOIs (1-25), e.g. ["10.1037/a0017838"]. "https://doi.org/"
+              and "doi:" prefixes are stripped.
+
+    Returns:
+        JSON with one entry per DOI: status ("retracted", "partially_retracted",
+        "expression_of_concern", "corrected", "updated", "clean",
+        "is_update_notice", "not_found", or "error"), title, updated_by notices
+        (type, label, date, notice DOI), update_to targets, related Crossref
+        relations, and openalex_is_retracted.
+    """
+    if isinstance(dois, str):
+        dois = [dois]
+    cleaned = []
+    for raw in dois or []:
+        doi = _clean_doi(str(raw))
+        if doi and doi not in cleaned:
+            cleaned.append(doi)
+    if not cleaned:
+        return json.dumps({"error": "dois must contain at least one DOI"}, indent=2)
+    if len(cleaned) > CHECK_RETRACTIONS_MAX_DOIS:
+        return json.dumps({
+            "error": f"at most {CHECK_RETRACTIONS_MAX_DOIS} DOIs per call",
+            "count": len(cleaned),
+        }, indent=2)
+
+    logger.info(f"Retraction check: {len(cleaned)} DOI(s)")
+    client = _AdapterHTTPClient()
+    crossref = RetractionWatchAdapter(client)
+    openalex = _OpenAlexSignal(client)
+    results = [_check_one_doi(doi, crossref, openalex) for doi in cleaned]
+    flagged = [r["doi"] for r in results
+               if r["status"] in _STATUS_RANK[1:]]
+    return json.dumps({
+        "source": "Crossref + OpenAlex",
+        "checked": len(results),
+        "flagged": flagged,
+        "results": results,
+    }, indent=2)
+
+
+def _opencitations_ids(value: str) -> dict:
+    """Split an OpenCitations id string ("omid:br/1 doi:10.x pmid:2") into a dict."""
+    ids = {}
+    for token in str(value or "").split():
+        scheme, _, ident = token.partition(":")
+        if ident and scheme not in ids:
+            ids[scheme] = ident
+    return ids
+
+
+@mcp.tool()
+async def get_citations(doi: str, direction: str = "both", max_results: int = 50) -> str:
+    """
+    Get the citation graph for a DOI from OpenCitations (open COCI/Crossref,
+    OpenAIRE, and other sources): works that cite it and works it cites.
+
+    Args:
+        doi: A DOI, e.g. "10.1037/a0017838" (URL/"doi:" prefixes are stripped).
+        direction: "citations" (citing works), "references" (cited works), or
+                   "both" (default).
+        max_results: 1-50 citation links to return per direction (default 50).
+
+    Returns:
+        JSON with total citation/reference counts and, per direction, entries
+        with the linked work's DOI, other identifiers (PMID, OpenAlex, OMID),
+        citation creation date, timespan, and journal/author self-citation flags.
+    """
+    doi = _clean_doi(doi)
+    if direction not in ("both", "citations", "references"):
+        return json.dumps({"error": "direction must be one of: both, citations, references"},
+                          indent=2)
+    if not doi:
+        return json.dumps({"error": "doi must not be empty"}, indent=2)
+
+    logger.info(f"OpenCitations lookup ({direction}): {doi}")
+    adapter = OpenCitationsAdapter(_AdapterHTTPClient(),
+                                   max_response_bytes=OPENCITATIONS_MAX_BYTES)
+    page_size = _clamp(max_results, 1, ADAPTER_PAGE_MAX)
+    result = {"doi": doi, "source": "OpenCitations"}
+    wanted = ["citations", "references"] if direction == "both" else [direction]
+    try:
+        for kind in wanted:
+            other = "citing" if kind == "citations" else "cited"
+            count = adapter.get_json(
+                f"{adapter.api_url}/{'citation' if kind == 'citations' else 'reference'}"
+                f"-count/doi:{doi}"
+            )
+            page = await adapter.search(SearchRequest(
+                query=doi, filters={"direction": kind}, page_size=page_size,
+            ))
+            entries = []
+            for item in page.items:
+                record = item.extensions.get("opencitations", {})
+                ids = _opencitations_ids(record.get(other))
+                entries.append({
+                    "doi": ids.get("doi", ""),
+                    "identifiers": ids,
+                    "creation": record.get("creation", ""),
+                    "timespan": record.get("timespan", ""),
+                    "journal_self_citation": record.get("journal_sc") == "yes",
+                    "author_self_citation": record.get("author_sc") == "yes",
+                    "oci": record.get("oci", ""),
+                })
+            total = count[0].get("count") if isinstance(count, list) and count else None
+            result[f"{kind}_count"] = int(total) if str(total or "").isdigit() else len(entries)
+            result[kind] = entries
+    except (AdapterError, ValueError) as e:
+        return json.dumps({"error": f"OpenCitations lookup failed: {e}", "doi": doi}, indent=2)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def search_clinical_trials(
+    query: str,
+    max_results: int = 10,
+    condition: str = None,
+    intervention: str = None,
+    status: str = None,
+    phase: str = None,
+    cursor: str = None,
+) -> str:
+    """
+    Search ClinicalTrials.gov registered studies (API v2).
+
+    Args:
+        query: Free-text search terms (e.g. "narcissism").
+        max_results: 1-50 studies to return (default 10).
+        condition: Optional condition/disease filter (e.g. "depression").
+        intervention: Optional intervention filter (e.g. "psychotherapy").
+        status: Optional overall status filter, comma-separated, e.g.
+                "RECRUITING" or "COMPLETED,ACTIVE_NOT_RECRUITING".
+        phase: Optional phase filter, e.g. "PHASE2" or "NA".
+        cursor: next_cursor value from a previous call to fetch the next page.
+
+    Returns:
+        JSON with studies including NCT ID, title, overall status, phases,
+        start date, responsible officials, brief summary, linked publications
+        (PMID/citation), and ClinicalTrials.gov URL, plus a next_cursor.
+    """
+    filters = {}
+    if condition:
+        filters["conditions"] = condition
+    if intervention:
+        filters["interventions"] = intervention
+    if status:
+        filters["status"] = status.strip().upper().replace(" ", "_")
+    if phase:
+        filters["phase"] = phase.strip().upper().replace(" ", "")
+    logger.info(f"ClinicalTrials.gov search: {query}")
+    try:
+        page = await ClinicalTrialsAdapter(_AdapterHTTPClient()).search(SearchRequest(
+            query=query, filters=filters, cursor=cursor or None,
+            page_size=_clamp(max_results, 1, ADAPTER_PAGE_MAX),
+        ))
+    except (AdapterError, ValueError) as e:
+        return json.dumps({"error": f"ClinicalTrials.gov search failed: {e}", "query": query},
+                          indent=2)
+
+    entries = []
+    for item in page.items:
+        ext = item.extensions.get("clinical_trials", {})
+        entries.append({
+            "nct_id": item.identifiers.get("nct", ""),
+            "title": item.title,
+            "overall_status": ext.get("overall_status") or "",
+            "phases": ext.get("phases", []),
+            "start_date": _adapter_date(item.published_at),
+            "officials": item.authors,
+            "brief_summary": item.abstract_excerpt or "",
+            "publications": [
+                {"pmid": p.get("pmid", ""), "type": p.get("type", ""),
+                 "citation": p.get("citation", "")}
+                for p in ext.get("publications", [])
+            ],
+            "url": item.provenance.canonical_url if item.provenance else "",
+        })
+    return json.dumps({
+        "query": query,
+        "source": "ClinicalTrials.gov",
+        "results_count": len(entries),
+        "next_cursor": page.next_cursor,
+        "entries": entries,
+    }, indent=2)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Entrypoint
 # ═══════════════════════════════════════════════════════════════════════════
 
