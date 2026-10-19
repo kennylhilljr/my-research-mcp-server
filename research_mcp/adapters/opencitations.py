@@ -10,7 +10,7 @@ from .base import BaseAdapter, digest_id, parse_datetime
 
 class OpenCitationsAdapter(BaseAdapter):
     name = "opencitations"
-    api_url = "https://opencitations.net/index/api/v2"
+    api_url = "https://api.opencitations.net/index/v2"
 
     def _normalize(self, record: dict[str, Any], direction: str) -> WorkSummary:
         result_doi = str(
@@ -39,7 +39,7 @@ class OpenCitationsAdapter(BaseAdapter):
         endpoint = "citations" if direction == "citations" else "references"
         payload = self.get_json(
             f"{self.api_url}/{endpoint}/doi:{quote(request.query.strip(), safe='')}",
-            params={"page": page_number, "rows": request.page_size},
+            params={"page": page_number, "page_size": request.page_size},
         )
         records = payload if isinstance(payload, list) else []
         items = [
