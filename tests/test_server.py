@@ -578,6 +578,117 @@ class TestFTSQueryBuilder:
         result = PaperIndex.to_fts_query(q)
         assert "NEAR" in result
 
+    def test_hyphen_is_quoted(self):
+        assert PaperIndex.to_fts_query("self-respect") == '"self-respect"'
+
+    def test_colon_is_quoted(self):
+        assert PaperIndex.to_fts_query("title:foo") == '"title:foo"'
+
+    def test_apostrophe_is_quoted(self):
+        assert PaperIndex.to_fts_query("don't") == "\"don't\""
+
+    def test_embedded_quote_is_doubled(self):
+        assert PaperIndex.to_fts_query('O"Brien') == '"O""Brien"'
+
+    def test_mixed_natural_language(self):
+        result = PaperIndex.to_fts_query("self-respect and dignity: a study")
+        assert result == '"self-respect" AND and AND "dignity:" AND a AND study'
+
+    def test_hyphenated_prefix_keeps_star(self):
+        assert PaperIndex.to_fts_query("self-res*") == '"self-res"*'
+
+    def test_operator_query_quotes_operands(self):
+        assert (PaperIndex.to_fts_query("self-respect AND dignity")
+                == '"self-respect" AND dignity')
+
+    def test_phrase_mixed_with_words(self):
+        assert (PaperIndex.to_fts_query('"neural networks" self-attention')
+                == '"neural networks" AND "self-attention"')
+
+    def test_near_exact_roundtrip(self):
+        q = "NEAR(policy gradient, 10)"
+        assert PaperIndex.to_fts_query(q) == q
+
+    def test_empty_query(self):
+        assert PaperIndex.to_fts_query("   ") == ""
+
+
+class TestFTSQueryExecution:
+    """Run awkward user queries against a real FTS5 index: no syntax errors."""
+
+    @pytest.fixture
+    def punct_db(self, db, sample_meta):
+        chunks = [{
+            "content": "Self-respect and dignity: a study of O\"Brien's "
+                       "don't-care attitude in Q:A sessions.",
+            "page_start": 1, "page_end": 1, "heading": "Intro",
+        }]
+        db.upsert_paper(sample_meta, chunks, "/tmp/fake.pdf", 1, "p1")
+        return db
+
+    @pytest.mark.parametrize("query", [
+        "self-respect",
+        "Q:A",
+        "don't",
+        "O'Brien's",
+        'O"Brien',
+        "self-respect and dignity: a study",
+        "self-res*",
+        "self-respect AND dignity",
+        "self-respect OR nonexistentword",
+    ])
+    def test_awkward_queries_match(self, punct_db, query):
+        results = punct_db.search(query)
+        assert len(results) == 1
+
+    @pytest.mark.parametrize("query", [
+        '"', '""', "*", "AND", "title:foo", "heading:intro", "NOT",
+        "x OR", "(unbalanced AND", "-", "", "café",
+    ])
+    def test_degenerate_queries_do_not_raise(self, punct_db, query):
+        assert isinstance(punct_db.search(query), list)
+
+    def test_snippet_contains_matched_term(self, punct_db):
+        results = punct_db.search("self-respect")
+        assert results[0]["snippet"]
+        assert "[Self-respect]" in results[0]["snippet"]
+
+
+class TestSnippets:
+    @pytest.mark.parametrize("query,term", [
+        ("attention", "attention"),
+        ("BLEU", "bleu"),
+        ("policy gradient", "policy"),
+        ("recur*", "recurrent"),
+        ('"recurrent neural networks"', "recurrent"),
+    ])
+    def test_each_result_has_snippet_with_term(self, indexed_db, query, term):
+        results = indexed_db.search(query)
+        assert results
+        for r in results:
+            assert r["snippet"]
+            assert term in r["snippet"].lower()
+            assert "[" in r["snippet"] and "]" in r["snippet"]
+            assert r["content"]  # full chunk kept for compatibility
+
+    def test_scoped_search_has_snippet(self, indexed_db):
+        results = indexed_db.search("BLEU", arxiv_ids=["2301.12345v1"])
+        assert "[BLEU]" in results[0]["snippet"]
+
+    def test_query_papers_tool_returns_snippet(self, indexed_db, monkeypatch):
+        import json
+
+        import server
+        monkeypatch.setattr(server, "_get_index", lambda: indexed_db)
+        tool = server.query_papers
+        fn = getattr(tool, "fn", tool)
+        payload = json.loads(fn("multi-head attention"))
+        assert payload["results_count"] >= 1
+        for r in payload["results"]:
+            snippet = r["snippet"].lower()
+            assert "attention" in snippet and "[" in snippet
+            assert r["content"]
+
 
 # ── Content Hash ─────────────────────────────────────────────────────────
 
