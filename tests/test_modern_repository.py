@@ -1,5 +1,4 @@
 import hashlib
-import json
 import sqlite3
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -17,7 +16,6 @@ from research_mcp.models import (
     Work,
 )
 from research_mcp.repository import CURRENT_SCHEMA_VERSION, SQLiteRepository
-
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 

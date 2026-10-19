@@ -16,7 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 SOURCES_FILE = SCRIPT_DIR / "sources.json"
@@ -78,9 +77,15 @@ def main() -> int:
         doi = source.get("doi")
 
         if args.dry_run:
-            method = "download_paper" if arxiv_id else "download_paper_by_doi" if doi else "metadata_only"
+            method = (
+                "download_paper" if arxiv_id
+                else "download_paper_by_doi" if doi
+                else "metadata_only"
+            )
             print(f"[dry-run] {method}: {title}")
-            results.append({"title": title, "status": "dry_run", "method": method, "source": source})
+            results.append(
+                {"title": title, "status": "dry_run", "method": method, "source": source}
+            )
             continue
 
         print(f"Indexing: {title}")

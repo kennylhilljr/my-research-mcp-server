@@ -66,7 +66,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 # My Research MCP Server
 
-Multi-source academic research platform exposing **49 tools** across **14 categories** via [MCP](https://modelcontextprotocol.io/).
+Multi-source academic research platform exposing **53 tools** across **15 categories** via [MCP](https://modelcontextprotocol.io/).
 
 ## Quick Commands
 
@@ -83,7 +83,7 @@ make format                                  # ruff format .
 
 | File | Purpose |
 |------|---------|
-| `server.py` (~3,700 lines) | All 49 tools, PaperIndex class, helpers, entrypoint |
+| `server.py` (~4,600 lines) | All 53 tools, PaperIndex class, helpers, entrypoint |
 | `tests/test_server.py` | Test suite |
 | `pyproject.toml` | Package config, dependencies, ruff/pytest settings |
 | `PAPER_INDEX.md` | Documentation on the paper indexing system |
@@ -101,7 +101,7 @@ FastMCP server
                    IAM docs (Google PSE / Vertex AI / Brave / SerpAPI), GitHub
 ```
 
-## Tool Inventory (49 tools)
+## Tool Inventory (53 tools)
 
 ### arXiv (2)
 `search_arxiv`, `get_paper_metadata`
@@ -132,6 +132,9 @@ FastMCP server
 
 ### OSF and PsyArXiv (2)
 `search_osf`, `search_psyarxiv`
+
+### Source Adapters (4)
+`search_europe_pmc`, `check_retractions`, `get_citations`, `search_clinical_trials`
 
 ### CORE (3)
 `search_core`, `get_core_work`, `download_core_paper`

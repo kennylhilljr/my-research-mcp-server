@@ -344,7 +344,8 @@ class SQLiteRepository:
 
     def delete_work(self, work_id: str) -> bool:
         with self._lock:
-            return self.connection.execute("DELETE FROM works WHERE work_id=?", (work_id,)).rowcount > 0
+            cursor = self.connection.execute("DELETE FROM works WHERE work_id=?", (work_id,))
+            return cursor.rowcount > 0
 
     def add_identifier(self, value: Identifier) -> None:
         self.connection.execute(
@@ -378,7 +379,9 @@ class SQLiteRepository:
 
     def list_documents(self, work_id: str | None = None) -> list[Document]:
         if work_id is None:
-            rows = self.connection.execute("SELECT * FROM documents ORDER BY document_id").fetchall()
+            rows = self.connection.execute(
+                "SELECT * FROM documents ORDER BY document_id"
+            ).fetchall()
         else:
             rows = self.connection.execute(
                 "SELECT * FROM documents WHERE work_id=? ORDER BY document_id", (work_id,)

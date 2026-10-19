@@ -5,7 +5,7 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io/)
 [![Tools](https://img.shields.io/badge/tools-49-orange.svg)](#tools-49-total)
 
-A multi-source academic research platform built on the [Model Context Protocol](https://modelcontextprotocol.io/). Searches, downloads, indexes, and queries scholarly content from 14 source categories through 49 tools — backed by SQLite FTS5 full-text search, DuckDB analytics, and local semantic vector search.
+A multi-source academic research platform built on the [Model Context Protocol](https://modelcontextprotocol.io/). Searches, downloads, indexes, and queries scholarly content from 15 source categories through 53 tools — backed by SQLite FTS5 full-text search, DuckDB analytics, and local semantic vector search.
 
 ## Prerequisites
 
@@ -26,13 +26,16 @@ A multi-source academic research platform built on the [Model Context Protocol](
 | **OpenAlex** | openalex.org | 250M+ works | Free CC0 catalog of scholarly works, authors, institutions, and concepts. Aggregates from Crossref, PubMed, institutional repos, and more. |
 | **CORE** | core.ac.uk | 200M+ works | Largest aggregator of open-access research from 11,000+ repositories worldwide. Best for technical reports, working papers, theses, and grey literature. |
 | **Crossref** | api.crossref.org | 150M+ works | DOI registration agency. Metadata for journal articles, conference proceedings, books, and datasets. Citation-formatted output (BibTeX, APA, RIS). |
+| **Europe PMC** | europepmc.org | 45M+ records | PubMed, PMC full text, and preprints, with MeSH headings. No key required. |
+| **OpenCitations** | opencitations.net | 2B+ citation links | Open citation graph: works citing a DOI and the references it cites. |
+| **ClinicalTrials.gov** | clinicaltrials.gov | 500,000+ studies | Registered clinical studies (API v2) with condition, intervention, status, and phase filters. |
 | **Unpaywall** | api.unpaywall.org | 50M+ OA articles | Open-access PDF discovery layer. Finds legal free PDFs for DOIs across publisher repos, preprint servers, and institutional archives. |
 
 ### Institutional Repositories
 
 | Source | Domain | Scale | Description |
 |--------|--------|-------|-------------|
-| **MIT DSpace** | dspace.mit.edu | 60,000+ works | MIT's institutional repository. Theses, technical reports, white papers, and peer-reviewed articles across all departments. DSpace v6 REST API. |
+| **MIT DSpace** | dspace.mit.edu | 60,000+ works | MIT's institutional repository. Theses, technical reports, white papers, and peer-reviewed articles across all departments. DSpace 8 REST API. |
 | **Harvard DASH** | dash.harvard.edu | 58,000+ works | Harvard's open-access repository. Articles, working papers, theses, and case studies. DSpace 8 REST API. |
 | **Cornell eCommons** | ecommons.cornell.edu | 24,000+ works | Cornell's institutional repository. Strong in CS, engineering, and policy research. Theses, articles, technical reports, datasets. DSpace 8 REST API. |
 | **Penn ScholarlyCommons** | repository.upenn.edu | 43,000+ works | UPenn's institutional repository. Articles, theses, datasets, and conference papers. Strong in AI ethics, governance, and policy. DSpace 8 REST API. |
@@ -165,7 +168,7 @@ sequenceDiagram
 
 ---
 
-## Tools (49 total)
+## Tools (53 total)
 
 ### arXiv API (2 tools)
 | Tool | Description |
@@ -231,6 +234,14 @@ sequenceDiagram
 |------|-------------|
 | `search_osf` | Search OSF preprints, study registrations, or projects; optional preprint server filter; sort by relevance or newest |
 | `search_psyarxiv` | Search psychology preprints on PsyArXiv by title, abstract, and keywords |
+
+### Source Adapters (4 tools)
+| Tool | Description |
+|------|-------------|
+| `search_europe_pmc` | Search Europe PMC (PubMed/PMC/preprints) with MeSH headings, PMID/PMCID/DOI, and cursor paging |
+| `check_retractions` | Check DOIs for retractions, corrections, and expressions of concern (Crossref updated-by/update-to plus OpenAlex is_retracted) |
+| `get_citations` | OpenCitations citation graph for a DOI: citing works, cited references, and total counts |
+| `search_clinical_trials` | Search ClinicalTrials.gov (v2) studies with condition, intervention, status, and phase filters |
 
 ### CORE (3 tools)
 | Tool | Description |

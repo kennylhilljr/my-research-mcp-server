@@ -12,13 +12,14 @@ import pytest
 # yet. Skip the module, with the reason, until those APIs land, so a plain `pytest`
 # still collects every test module.
 try:
+    from research_mcp.federation import deduplicate_works
+    from research_mcp.server import build_mcp
+
     from research_mcp.config import Settings
     from research_mcp.errors import ErrorCode, ResearchError
-    from research_mcp.federation import deduplicate_works
     from research_mcp.jobs import JobService, JobState
     from research_mcp.models import Provenance, WorkSummary
     from research_mcp.prompts import PROMPT_NAMES
-    from research_mcp.server import build_mcp
 except ImportError as exc:  # pragma: no cover - depends on unimplemented modules
     pytest.skip(
         f"modern MCP surface not implemented yet ({exc}); "

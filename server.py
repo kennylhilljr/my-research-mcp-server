@@ -17,16 +17,15 @@ An MCP server that lets you:
 Dependencies:  pip install mcp requests pymupdf duckdb google-auth fastembed
 """
 
+import argparse
+import hashlib
+import json
+import logging
 import os
 import re
-import sys
-import json
+import sqlite3
 import time
 import uuid
-import sqlite3
-import logging
-import hashlib
-import argparse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,7 +44,9 @@ PDF_BASE_URL = "https://arxiv.org/pdf"
 ABS_BASE_URL = "https://arxiv.org/abs"
 
 DEFAULT_DOWNLOAD_DIR = os.environ.get("ARXIV_DOWNLOAD_DIR", os.path.expanduser("~/arxiv-papers"))
-DEFAULT_DB_PATH = os.environ.get("ARXIV_DB_PATH", os.path.join(DEFAULT_DOWNLOAD_DIR, "arxiv_index.db"))
+DEFAULT_DB_PATH = os.environ.get(
+    "ARXIV_DB_PATH", os.path.join(DEFAULT_DOWNLOAD_DIR, "arxiv_index.db")
+)
 CHUNK_SIZE = int(os.environ.get("ARXIV_CHUNK_SIZE", "1500"))       # chars per chunk
 CHUNK_OVERLAP = int(os.environ.get("ARXIV_CHUNK_OVERLAP", "200"))  # overlap between chunks
 RATE_LIMIT_SECONDS = 3
@@ -582,7 +583,9 @@ def _parse_entry(entry: ET.Element) -> dict:
         "categories": categories,
         "primary_category": pc_el.get("term", "") if pc_el is not None else "",
         "comment": comment_el.text.strip() if comment_el is not None and comment_el.text else "",
-        "journal_ref": journal_el.text.strip() if journal_el is not None and journal_el.text else "",
+        "journal_ref": (
+            journal_el.text.strip() if journal_el is not None and journal_el.text else ""
+        ),
         "doi": doi_el.text.strip() if doi_el is not None and doi_el.text else "",
         "pdf_url": pdf_link or f"{PDF_BASE_URL}/{arxiv_id}",
         "abs_url": abs_link or f"{ABS_BASE_URL}/{arxiv_id}",
@@ -1088,7 +1091,8 @@ def get_semantic_scholar_paper(paper_id: str) -> str:
     Args:
         paper_id: Semantic Scholar paper ID, arXiv ID (prefix with "ArXiv:"),
                   DOI (prefix with "DOI:"), or Corpus ID (prefix with "CorpusId:").
-                  Examples: "ArXiv:2509.07006", "DOI:10.1145/1234", "649def34f8be52c8b66281af98ae884c09aef38b"
+                  Examples: "ArXiv:2509.07006", "DOI:10.1145/1234",
+                  "649def34f8be52c8b66281af98ae884c09aef38b"
     """
     resp = _ss_request(
         f"{SEMANTIC_SCHOLAR_API_BASE}/paper/{paper_id}",
@@ -1149,7 +1153,10 @@ DSPACE8_REPOS = {
         "name": "Harvard DASH",
         "api_base": "https://dash.harvard.edu/server/api",
         "web_base": "https://dash.harvard.edu",
-        "description": "58,000+ works: articles, working papers, theses, case studies by Harvard researchers",
+        "description": (
+            "58,000+ works: articles, working papers, theses, case studies "
+            "by Harvard researchers"
+        ),
     },
     "cornell": {
         "name": "Cornell eCommons",
@@ -2839,7 +2846,7 @@ def search_gcp_docs(query: str, max_results: int = 10) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-    except requests.HTTPError as e:
+    except requests.HTTPError:
         return json.dumps({
             "error": f"GCP docs search failed: HTTP {resp.status_code}",
             "body": resp.text[:500],
@@ -3341,7 +3348,8 @@ def search_iam_docs(query: str, max_results: int = 10) -> str:
         "error": "IAM docs search failed",
         "details": last_error,
         "hint": "Set IAM_DOCS_SEARCH_PROVIDER to one of: brave, serpapi, google, auto. "
-                "Also ensure SERPAPI_API_KEY or BRAVE_SEARCH_API_KEY is set for non-Google providers.",
+                "Also ensure SERPAPI_API_KEY or BRAVE_SEARCH_API_KEY is set "
+                "for non-Google providers.",
     }, indent=2)
 
 
@@ -3938,7 +3946,10 @@ def dataset_query(sql: str, limit: int = 100) -> str:
         try:
             resolved = candidate.resolve()
         except Exception as e:
-            return json.dumps({"error": f"Cannot resolve path: {raw}", "exception_type": type(e).__name__}, indent=2)
+            return json.dumps(
+                {"error": f"Cannot resolve path: {raw}", "exception_type": type(e).__name__},
+                indent=2,
+            )
         if root not in resolved.parents and resolved != root:
             return json.dumps({
                 "error": "Path outside DUCKDB_DATASETS_DIR is not allowed",

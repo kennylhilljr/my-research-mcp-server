@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 PROMPT_NAMES = (
     "fact-check-claim",
     "literature-review-plan",
@@ -25,7 +24,8 @@ def literature_review_plan(
     topic: str, inclusion_criteria: str = "", exclusion_criteria: str = ""
 ) -> str:
     return (
-        f"Plan a reproducible literature review on {topic!r}. Inclusion: {inclusion_criteria or 'none'}; "
+        f"Plan a reproducible literature review on {topic!r}. "
+        f"Inclusion: {inclusion_criteria or 'none'}; "
         f"exclusion: {exclusion_criteria or 'none'}. Propose databases, queries, deduplication, "
         "screening, extraction fields, and stopping rules. Do not claim exhaustive coverage."
     )

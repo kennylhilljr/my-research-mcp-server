@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **OSF / PsyArXiv**: `search_osf`, `search_psyarxiv` via the SHARE index, with `year_from` / `year_to` filters
+- **Source adapter tools**: `search_europe_pmc`, `check_retractions`, `get_citations` (OpenCitations), `search_clinical_trials`
+- `item_type` filter on DSpace 8 search tools (default `"scholarly"`; `"any"` disables)
+- `snippet` field on `query_papers` results
+
+### Changed
+- MIT DSpace moved from the retired DSpace 6 REST API to DSpace 8 (`/server/api`)
+- `mcp` pinned to `>=1.0.0,<2`; setuptools package discovery fixed so `pip install -e .` works
+
+### Fixed
+- OpenAlex parser crash on null `source` and other nullable fields
+- FTS5 errors on hyphenated or punctuated queries in `query_papers`
+- Mojibake in `get_doi_citation` output (forced UTF-8)
+- DSpace 8 item and search HTTP errors now return JSON errors instead of raising
+- `research_mcp/prompts.py` syntax error; naive legacy timestamps in repository migration
+- OpenCitations adapter: v2 base URL and `page_size` parameter
+
 ## [2.0.0] - 2025-04-17
 
 ### Added

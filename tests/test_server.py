@@ -1,14 +1,14 @@
 """Tests for the My Research MCP server."""
 
 import os
-import sqlite3
+
+# Import from the server module at repo root
+import sys
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Import from the server module at repo root
-import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import (
@@ -35,7 +35,6 @@ from server import (
     extract_text_from_pdf,
     fetch_cloud_doc_page,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -903,7 +902,11 @@ class TestParseCrossref:
         assert result["citation_count"] == 0
 
     def test_abstract_html_stripped(self):
-        item = {"abstract": "<jats:p>Transformer models use <jats:italic>attention</jats:italic>.</jats:p>"}
+        item = {
+            "abstract": (
+                "<jats:p>Transformer models use <jats:italic>attention</jats:italic>.</jats:p>"
+            )
+        }
         result = _parse_crossref(item)
         assert "<" not in result["abstract"]
         assert "attention" in result["abstract"]

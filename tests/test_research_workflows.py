@@ -10,9 +10,10 @@ import pytest
 # Provenance, research_mcp.workflows) that are not implemented yet. Skip the module,
 # with the reason, until those APIs land, so a plain `pytest` collects every module.
 try:
+    from research_mcp.workflows import build_evidence_matrix, compare_records
+
     from research_mcp.cache import SemanticCache
     from research_mcp.models import EvidenceItem, Provenance, WorkSummary
-    from research_mcp.workflows import build_evidence_matrix, compare_records
 except ImportError as exc:  # pragma: no cover - depends on unimplemented modules
     pytest.skip(
         f"evidence workflow APIs not implemented yet ({exc}); "
