@@ -3,13 +3,17 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import (  # noqa: E402
     PSYARXIV_PUBLISHER,
     _parse_share_card,
+    _share_year_filter,
     search_osf,
     search_psyarxiv,
 )
@@ -125,7 +129,90 @@ class TestSearchPsyarxiv:
         get.assert_not_called()
 
 
+AFTER = "cardSearchFilter[dateCreated][after]"
+BEFORE = "cardSearchFilter[dateCreated][before]"
+
+
+class TestYearFilter:
+    def test_no_years_adds_no_params(self):
+        assert _share_year_filter() == ({}, None)
+
+    def test_inclusive_range_maps_to_exclusive_operators(self):
+        params, error = _share_year_filter(2020, 2024)
+        assert error is None
+        assert params == {AFTER: "2019", BEFORE: "2025"}
+
+    def test_single_year(self):
+        params, error = _share_year_filter(2024, 2024)
+        assert error is None
+        assert params == {AFTER: "2023", BEFORE: "2025"}
+
+    @pytest.mark.parametrize("year_from,year_to,fragment", [
+        (2025, 2020, "less than or equal"),
+        (1800, None, "year_from must be between"),
+        (None, 99999, "year_to must be between"),
+        ("2024", None, "year_from must be an integer"),
+        (True, None, "year_from must be an integer"),
+    ])
+    def test_invalid(self, year_from, year_to, fragment):
+        params, error = _share_year_filter(year_from, year_to)
+        assert params == {}
+        assert fragment in error
+
+    def test_next_year_allowed(self):
+        next_year = datetime.now(timezone.utc).year + 1
+        assert _share_year_filter(None, next_year)[1] is None
+
+
+class TestSearchPsyarxivYears:
+    @patch("server.requests.get")
+    def test_year_from_only(self, get):
+        get.return_value = mock_get(share_response([]))
+        search_psyarxiv("narcissism", year_from=2024)
+        params = get.call_args.kwargs["params"]
+        assert params[AFTER] == "2023"
+        assert BEFORE not in params
+        assert params["cardSearchFilter[publisher]"] == PSYARXIV_PUBLISHER
+
+    @patch("server.requests.get")
+    def test_year_to_only(self, get):
+        get.return_value = mock_get(share_response([]))
+        search_psyarxiv("narcissism", year_to=2019)
+        params = get.call_args.kwargs["params"]
+        assert params[BEFORE] == "2020"
+        assert AFTER not in params
+
+    @patch("server.requests.get")
+    def test_no_years_no_date_params(self, get):
+        get.return_value = mock_get(share_response([]))
+        search_psyarxiv("narcissism")
+        params = get.call_args.kwargs["params"]
+        assert AFTER not in params and BEFORE not in params
+
+    @patch("server.requests.get")
+    def test_reversed_range_makes_no_request(self, get):
+        out = json.loads(search_psyarxiv("x", year_from=2025, year_to=2020))
+        assert set(out) == {"error"}
+        get.assert_not_called()
+
+
 class TestSearchOsf:
+    @patch("server.requests.get")
+    def test_year_range(self, get):
+        get.return_value = mock_get(share_response([]))
+        search_osf("romance scam", resource_type="registration",
+                   year_from=2020, year_to=2022)
+        params = get.call_args.kwargs["params"]
+        assert params[AFTER] == "2019"
+        assert params[BEFORE] == "2023"
+        assert params["cardSearchFilter[resourceType]"] == "Registration"
+
+    @patch("server.requests.get")
+    def test_out_of_range_year_makes_no_request(self, get):
+        out = json.loads(search_osf("x", year_from=1066))
+        assert set(out) == {"error"}
+        get.assert_not_called()
+
     @patch("server.requests.get")
     def test_registration_filter_without_provider(self, get):
         get.return_value = mock_get(share_response([]))
