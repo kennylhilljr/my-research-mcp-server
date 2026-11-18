@@ -1,5 +1,14 @@
 # My Research MCP Server
 
+> [!WARNING]
+> **Legacy (v1), read-only.** This repository is superseded by **[Research MCP v2](https://github.com/kennylhilljr/research-mcp)** (`kennylhilljr/research-mcp`), a clean rebuild. Start new work there.
+>
+> **Cutover status:** v2 milestone M0 is in progress. Cutover from v1 to v2 happens at milestone M4. Until then, v1 stays installed and running for its existing MCP clients and only gets critical fixes. At cutover, the v1 client entries are disabled, not deleted, so rollback stays possible. For the latest status, see the v2 [README](https://github.com/kennylhilljr/research-mcp#build-status) and the [cutover runbook](https://github.com/kennylhilljr/research-mcp/blob/main/docs/runbooks/migration-cutover-v2.md).
+>
+> **When this repository will be archived:** after cutover, once v2 has had 14 days of daily use with no fallback to v1 and the owner has given an explicit go-ahead (step 10, "Retire v1", of the cutover runbook). Until then it is not archived, so critical v1 fixes can still land.
+>
+> Contributors: see [CONTRIBUTING.md](CONTRIBUTING.md) for what v1 still accepts.
+
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io/)
